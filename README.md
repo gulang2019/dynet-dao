@@ -1,4 +1,35 @@
-<div align="center">
+## DyNet-DAO 
+
+This repo implements dynamic activation offloading on-top-of DyNet. 
+
+### Build
+
+Install Eigen 
+```
+mkdir eigen
+cd eigen
+wget https://github.com/clab/dynet/releases/download/2.1/eigen-b2e267dc99d4.zip
+unzip eigen-b2e267dc99d4.zip
+```
+
+Build 
+```
+git clone https://github.com/clab/dynet.git
+cd dynet
+mkdir build
+cd build
+# Run CMake
+# -DENABLE_BOOST=ON in combination with -DENABLE_CPP_EXAMPLES=ON also
+# compiles the multiprocessing c++ examples
+cmake .. -DEIGEN3_INCLUDE_DIR=/path/to/eigen -DENABLE_CPP_EXAMPLES=ON -DBACKEND=CUDA
+# Compile using 2 processes
+make -j 2
+# Test with an example
+./examples/xor
+```
+
+Transformer Example: ./examples/transformer
+<!-- <div align="center">
   <img alt="DyNet" src="doc/source/images/dynet_logo.png"><br><br>
 </div>
 
@@ -108,4 +139,4 @@ If you use DyNet for research, please cite this report as follows:
 
 ## Contributing
 
-We welcome any contribution to DyNet! You can find the contributing guidelines [here](http://dynet.readthedocs.io/en/latest/contributing.html)
+We welcome any contribution to DyNet! You can find the contributing guidelines [here](http://dynet.readthedocs.io/en/latest/contributing.html) -->
