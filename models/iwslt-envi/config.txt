@@ -1,0 +1,13 @@
+max-seq-len=150
+minibatch-size=1024
+treport=1000
+dreport=20000
+src-vocab=datasets/iwslt15/vocab.en
+tgt-vocab=datasets/iwslt15/vocab.vi
+train=datasets/iwslt15/train.en-vi.capped
+devel=datasets/iwslt15/tst2012.en-vi.capped
+epochs=2
+attention-dropout-p=0.0
+nlayers=2
+num-units=128
+num-heads=2

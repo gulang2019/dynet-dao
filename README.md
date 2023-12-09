@@ -43,7 +43,11 @@ cd build/examples
 ./mnist -t ../../datasets/mnist/train-images.idx3-ubyte -d ../../datasets/mnist/t10k-images.idx3-ubyte -tl ../../datasets/mnist/train-labels.idx1-ubyte -dl ../../datasets/mnist/t10k-labels.idx1-ubyte --batch_size 128 -N 20
 ```
 
-Transformer Example: ./examples/transformer
+Transformer Example 
+```
+# cd <repo dir>
+./build/examples/transformer-train -c models/iwslt-envi/config.txt --parameters models/iwslt-envi/en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu &>models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu
+```
 <!-- <div align="center">
   <img alt="DyNet" src="doc/source/images/dynet_logo.png"><br><br>
 </div>
