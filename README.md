@@ -4,6 +4,13 @@ This repo implements dynamic activation offloading on-top-of DyNet.
 
 ### Build
 
+Preparation
+```
+# load CUDA 11.1;
+cd ~ 
+source cuda.sh 11.1 
+```
+
 Install Eigen 
 ```
 mkdir eigen
@@ -26,6 +33,14 @@ cmake .. -DEIGEN3_INCLUDE_DIR=/path/to/eigen -DENABLE_CPP_EXAMPLES=ON -DBACKEND=
 make -j 2
 # Test with an example
 ./examples/xor
+```
+
+Run mnist 
+```
+# prepare datasets 
+ln -s /ssd1/siyuanch/workspace/dynet-dao/datasets datasets 
+cd build/examples 
+./mnist -t ../../datasets/train-images.idx3-ubyte -d ../../datasets/t10k-images.idx3-ubyte -tl ../../datasets/train-labels.idx1-ubyte -dl ../../datasets/t10k-labels.idx1-ubyte --batch_size 128 -N 20
 ```
 
 Transformer Example: ./examples/transformer
