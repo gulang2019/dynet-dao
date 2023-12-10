@@ -52,3 +52,7 @@ if(ENABLE_BOOST)
   ADD_EXAMPLE(transformer transformer-train)
   ADD_EXAMPLE(transformer transformer-decode)
 endif()
+
+add_subdirectory(gpt2)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/gpt2)
+add_subdirectory(gpt2/mteval)

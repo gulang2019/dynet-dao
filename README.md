@@ -48,6 +48,13 @@ Transformer Example
 # cd <repo dir>
 ./build/examples/transformer-train -c models/iwslt-envi/config.txt --parameters models/iwslt-envi/en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu &>models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu
 ```
+
+gpt2 Example
+```
+# cd <repo dir>
+mkdir -p models/iwslt-envi/lm
+./build/examples/transformer-lm -c models/iwslt-envi/lm/config.txt --reset-if-stuck --use-smaller-minibatch --use-label-smoothing &>models/iwslt-envi/lm/train.log
+```
 <!-- <div align="center">
   <img alt="DyNet" src="doc/source/images/dynet_logo.png"><br><br>
 </div>
