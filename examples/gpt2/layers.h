@@ -113,11 +113,11 @@ struct FeedForwardLayer{
 	TransformerConfig* _p_tfc = nullptr;	
 
 	dynet::Expression build_graph(dynet::ComputationGraph& cg, const dynet::Expression& i_inp/*num_units x L*/){
-		// FFN(x) = relu(x * W1 + b1) * W2 + b2
+		// FFN(x) = act(x * W1 + b1) * W2 + b2
 		dynet::Expression i_inner = _l_inner.apply(cg, i_inp, false, true);// x * W1 + b1
-
-		if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::RELU)
-			i_inner = dynet::rectify(i_inner);
+		//! now gelu
+		if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::GELU)
+			i_inner = dynet::silu(i_inner, 1.702f);
 		// use Swish from https://arxiv.org/pdf/1710.05941.pdf
 		else if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH) 
 			i_inner = dynet::silu(i_inner);
@@ -129,15 +129,6 @@ struct FeedForwardLayer{
 		else TRANSFORMER_RUNTIME_ASSERT("Unknown feed-forward activation type!");
 
 		dynet::Expression i_outer = _l_outer.apply(cg, i_inner, false, true);// relu(x * W1 + b1) * W2 + b2
-
-		// dropout for feed-forward layer
-		// Note: this dropout can be moved to after RELU activation and before outer linear transformation (e.g., refers to Sockeye?).
-		if (_p_tfc->_use_dropout && _p_tfc->_ff_dropout_rate > 0.f)
-#ifdef USE_COLWISE_DROPOUT
-			i_outer = dynet::dropout_dim(i_outer, 1/*col-major*/, _p_tfc->_ff_dropout_rate);
-#else
-			i_outer = dynet::dropout(i_outer, _p_tfc->_ff_dropout_rate);
-#endif
 
 		return i_outer;
 	}
@@ -295,11 +286,11 @@ struct MultiHeadAttentionLayer{
 			if (_use_soft_alignments) get_alignments(i_batch_alphas);
 					
 			// attention dropout (col-major or full?)
-			if (_p_tfc->_use_dropout && _p_tfc->_attention_dropout_rate > 0.f)
+			if (_p_tfc->_use_dropout && _p_tfc->_decoder_sublayer_dropout_rate > 0.f)
 #ifdef USE_COLWISE_DROPOUT
-				i_batch_alphas = dynet::dropout_dim(i_batch_alphas, 1/*col-major*/, _p_tfc->_attention_dropout_rate);// col-wise dropout
+				i_batch_alphas = dynet::dropout_dim(i_batch_alphas, 1/*col-major*/, _p_tfc->_decoder_sublayer_dropout_rate);// col-wise dropout
 #else
-				i_batch_alphas = dynet::dropout(i_batch_alphas, _p_tfc->_attention_dropout_rate);// full matrix
+				i_batch_alphas = dynet::dropout(i_batch_alphas, _p_tfc->_decoder_sublayer_dropout_rate);// full matrix
 #endif
 
 			i_batch_alphas = i_batch_V/*((num_units/nheads, Lx), batch_size*nheads)*/ * i_batch_alphas/*((Lx, Ly), batch_size*nheads))*/;// ((num_units/nheads, Ly), batch_size*nheads)

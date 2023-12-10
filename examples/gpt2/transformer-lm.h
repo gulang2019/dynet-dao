@@ -80,32 +80,42 @@ struct LMDecoderLayer{
 		dynet::Expression i_ln2_b = dynet::parameter(cg, _p_ln2_b);
 	
 		dynet::Expression i_decl = i_dec_inp;
-		
-		// multi-head self attention sub-layer
-		dynet::Expression i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_decl, i_decl, self_mask);// ((num_units, Ly), batch_size)
-
-		// dropout to the output of sub-layer
-		if (_p_tfc->_use_dropout && _p_tfc->_decoder_sublayer_dropout_rate > 0.f)
-#ifdef USE_COLWISE_DROPOUT
-			i_mh_self_att = dynet::dropout_dim(i_mh_self_att, 1/*col-major*/, _p_tfc->_decoder_sublayer_dropout_rate);// col-wise dropout
-#else
-			i_mh_self_att = dynet::dropout(i_mh_self_att, _p_tfc->_decoder_sublayer_dropout_rate);// full dropout
-#endif
+		//! dynet::dropout apply scaling at training time
+		// stoch depth
+		dynet::Expression i_mh_self_att = i_decl;
+		if (_p_tfc->_use_dropout) { // training
+			if (rand01() > _p_tfc->_attention_dropout_rate) {
+				// layer normalisation 1 (prenorm)
+				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
+				// multi-head self attention sub-layer
+				i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
+				// element-wise dropout applied within attn sublayer
+			}
+			i_mh_self_att = i_mh_self_att / (1-_p_tfc->_attention_dropout_rate);
+		} else { // inference
+			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
+			i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
+		}
 
 		// w/ residual connection
-		i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)
+		i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)		
 
-		// layer normalisation 1
-		i_decl = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
-
-		// position-wise feed-forward sub-layer
-		dynet::Expression i_ff = _feed_forward_sublayer.build_graph(cg, i_decl);// ((num_units, Ly), batch_size)
+		dynet::Expression i_ff = i_decl;
+		if (_p_tfc->_use_dropout) { // training
+			if (rand01() > _p_tfc->_ff_dropout_rate) {
+				// layer normalisation 3 (prenorm)
+				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
+				// position-wise feed-forward sub-layer
+				i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
+			}
+			i_ff = i_ff / (1-_p_tfc->_ff_dropout_rate);
+		} else { // inference
+			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
+			i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
+		}
 
 		// w/ residual connection
 		i_decl = i_decl + i_ff;
-
-		// layer normalisation 3
-		i_decl = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 
 		return i_decl;
 	}
@@ -128,7 +138,7 @@ struct LMDecoder{
 			_p_tgt_rnn.reset(new dynet::LSTMBuilder(tfc._nlayers, tfc._num_units, tfc._num_units, *mod, true/*w/ layer norm*/));
 		}
 
-		_scale_emb = std::sqrt(tfc._num_units);
+		_scale_emb = std::sqrt(tfc._num_units); // XXX might not need
 
 		_p_tfc = &tfc;
 	}
@@ -427,7 +437,7 @@ protected:
 
 	dynet::Dict _dict;// vocabulary
 
-	dynet::Parameter _p_Wo_bias;// bias of final linear projection layer
+	dynet::Parameter _p_lnf_g, _p_lnf_b;// final layer normalisation
 
 	TransformerConfig _tfc;// local configuration storage
 };
@@ -444,8 +454,9 @@ TransformerLModel::TransformerLModel(const TransformerConfig& tfc, dynet::Dict& 
 
 	_decoder.reset(new LMDecoder(_all_params.get(), _tfc));// create new decoder object
 
-	// final output projection layer
-	_p_Wo_bias = _all_params.get()->add_parameters({_tfc._tgt_vocab_size});// optional
+	// final LayerNorm
+	_p_lnf_g = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(1.f));
+	_p_lnf_b = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(0.f));
 
 	// dictionaries
 	_dict = d;
@@ -459,16 +470,19 @@ dynet::Expression TransformerLModel::step_forward(dynet::ComputationGraph &cg
 	// decode target
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, partial_sents);
+
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
+
 	dynet::Expression i_tgt_t;
 	if (partial_sents[0].size() == 1) i_tgt_t = i_tgt_ctx;
 	else 
 		//i_tgt_t = dynet::select_cols(i_tgt_ctx, {(unsigned)(partial_sents.size() - 1)});
 		i_tgt_t = dynet::pick(i_tgt_ctx, (unsigned)(partial_sents[0].size() - 1), 1);// shifted right, ((|V_T|, 1), batch_size)
 
-	// output linear projections (w/ bias)
-	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
-	dynet::Expression i_r_t = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_t});// |V_T| x 1 (with additional bias)
+	dynet::Expression i_r_t = i_Wo_emb_tgt * i_tgt_t;
 
 	// FIXME: get the alignments for visualisation
 
@@ -487,12 +501,12 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
 
-	// get losses	
-	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
-	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
 
-	// compute the logit and linear projections
-	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+	dynet::Expression i_r = i_Wo_emb_tgt * i_tgt_ctx;// ((|V_T|, (Ly-1)), batch_size)
 
 	std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;
@@ -540,12 +554,12 @@ void TransformerLModel::get_avg_ll(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
 
-	// get losses	
-	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
-	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
 
-	// compute the logit and linear projections
-	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+	dynet::Expression i_r = i_Wo_emb_tgt * i_tgt_ctx;// ((|V_T|, (Ly-1)), batch_size)
 
 	std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;
@@ -581,12 +595,12 @@ void TransformerLModel::get_avg_ll(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
 
-	// get losses	
-	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
-	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
 
-	// compute the logit and linear projections
-	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, i_Wo_emb_tgt, i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+	dynet::Expression i_r = i_Wo_emb_tgt * i_tgt_ctx;// ((|V_T|, (Ly-1)), batch_size)
 
 	std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;
@@ -616,12 +630,12 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, v_soft_ssents);// ((num_units, Ly), batch_size)
 
-	// get losses	
-	dynet::Expression i_Wo_bias = dynet::parameter(cg, _p_Wo_bias);
-	dynet::Expression i_Wo_emb_tgt = _decoder.get()->get_wrd_embedding_matrix(cg);// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
 
-	// compute the logit and linear projections
-	dynet::Expression i_r = dynet::affine_transform({i_Wo_bias, dynet::transpose(i_Wo_emb_tgt), i_tgt_ctx});// ((|V_T|, (Ly-1)), batch_size)
+	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
+	dynet::Expression i_r = i_Wo_emb_tgt * i_tgt_ctx;// ((|V_T|, (Ly-1)), batch_size)
 
 	std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;

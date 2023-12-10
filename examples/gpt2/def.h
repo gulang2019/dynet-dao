@@ -52,7 +52,6 @@ namespace transformer {
 
 //---
 #define MULTI_HEAD_ATTENTION_PARALLEL // to use pseudo-batching for multi-head attention computing (faster)
-#define USE_COLWISE_DROPOUT // use col-wise dropout
 #define USE_LECUN_DIST_PARAM_INIT // use Le Cun's uniform distribution for LinearLayer params initialisation (arguably faster convergence)
 #define USE_KEY_QUERY_MASKINGS // use key and query maskings in multi-head attention
 #define USE_LINEAR_TRANSFORMATION_BROADCASTING // use linear transformation broadcasting at final output layer (much faster)
@@ -60,7 +59,7 @@ namespace transformer {
 
 //---
 enum ATTENTION_TYPE { DOT_PRODUCT=1, ADDITIVE_MLP=2 };
-enum FFL_ACTIVATION_TYPE { RELU=1, SWISH=2, SWISH_LEARNABLE_BETA=3 };
+enum FFL_ACTIVATION_TYPE { GELU=1, SWISH=2, SWISH_LEARNABLE_BETA=3 };
 //---
 
 //---
@@ -179,7 +178,7 @@ struct TransformerConfig{
 
 	unsigned _attention_type = ATTENTION_TYPE::DOT_PRODUCT;
 
-	unsigned _ffl_activation_type = FFL_ACTIVATION_TYPE::RELU;
+	unsigned _ffl_activation_type = FFL_ACTIVATION_TYPE::GELU;
 
 	bool _use_hybrid_model = false;// RNN encoding over word embeddings instead of word embeddings + positional encoding
 
