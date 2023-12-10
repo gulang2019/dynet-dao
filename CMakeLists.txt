@@ -84,7 +84,7 @@ endif()
 if(MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -W1 /MP")   # -Wall produces 20k warnings. Enable parallel compilation
 else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fno-finite-math-only -Wall -Wno-missing-braces -std=c++11")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fno-finite-math-only -Wall -Wno-missing-braces -std=c++17")
 
   if (NOT RELEASE_OPT_LEVEL)
     set(RELEASE_OPT_LEVEL "fast")
@@ -179,6 +179,18 @@ if (WITH_CUDA_BACKEND)
   else()
     message("-- CUDNN not found, some dependent functionalities will be disabled")
   endif()
+  find_library(CUDA_NVTX_LIBRARY
+    NAMES nvToolsExt nvTools nvtoolsext nvtools nvtx NVTX
+    PATHS "${CUDA_CUDART_LIBRARY_DIR}" "${CUDA_TOOLKIT_ROOT_DIR}" ENV LD_LIBRARY_PATH
+    PATH_SUFFIXES "lib64" "common/lib64" "common/lib" "lib"
+    DOC "Location of the CUDA Toolkit Extension (NVTX) library"
+    NO_DEFAULT_PATH
+  )
+  message("-- CUDA_NVTX_LIBRARY: ${CUDA_NVTX_LIBRARY}")
+  if(CUDA_NVTX_LIBRARY)
+    list(APPEND CUDA_LIBRARIES ${CUDA_NVTX_LIBRARY})
+    set(LIBS ${LIBS} ${CUDA_NVTX_LIBRARY})  
+  endif()
 endif()
 
 # look for Eigen
@@ -197,7 +209,18 @@ set(LIBS ${LIBS} ${CMAKE_THREAD_LIBS_INIT})
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config.h)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
+if (USE_DAO)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_DAO")
+  file(GLOB DAO_C_SRCS "${PROJECT_SOURCE_DIR}/dao/src/*.cc")
+  set(DAO_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/dao/include")
+  message("-- DAO include dir is " ${DAO_INCLUDE_DIR})
+endif(USE_DAO)
+
 add_subdirectory(dynet)
+
+if (USE_DAO)
+  add_subdirectory(dao)
+endif(USE_DAO)
 
 if(ENABLE_CPP_EXAMPLES)
   add_subdirectory(tutorial)

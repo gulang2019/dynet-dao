@@ -1,0 +1,13 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 3.15)
+
+macro(ADD_EXAMPLE TARGET)
+  include_directories(${PROJECT_SOURCE_DIR}/dynet)
+  include_directories(${PROJECT_SOURCE_DIR}/dao/include)
+#   if (EXISTS ${TARGET}.cc)
+#     message(STATUS "Adding example ${TARGET}")
+  add_executable(${TARGET} ${TARGET}.cc)
+#   endif()
+  target_link_libraries(${TARGET} dynet)
+endmacro(ADD_EXAMPLE)
+
+ADD_EXAMPLE(dao_xor)

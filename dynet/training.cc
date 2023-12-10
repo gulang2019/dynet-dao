@@ -7,6 +7,10 @@
 #include "dynet/weight-decay.h"
 #include "dynet/io.h"
 
+#ifdef USE_DAO
+#include "DAO/DAO.h" 
+#endif 
+
 // same as in dynet/io.cc
 static const int FLOAT32_PRECISION = 8;
 
@@ -14,7 +18,30 @@ static const int FLOAT32_PRECISION = 8;
 #ifdef __CUDACC__
 #define DYNET_TRAINER_INST_DEV_IMPL(MyTrainer) \
   template void MyTrainer::update_rule_dev<Device_GPU>(const Device_GPU & dev, real gscale, const std::vector<Tensor*> & values);
-#elif defined(HAVE_CUDA)
+#elif defined(HAVE_CUDA) && defined(USE_DAO)
+// This is correct, but dying when models are read and written.
+#define DYNET_TRAINER_INST_DEV_IMPL(MyTrainer) \
+  extern template void MyTrainer::update_rule_dev<Device_GPU>(const Device_GPU & dev, real gscale, const std::vector<Tensor*> & values); \
+  template void MyTrainer::update_rule_dev<Device_CPU>(const Device_CPU & dev, real gscale, const std::vector<Tensor*> & values); \
+  void MyTrainer::update_rule(real gscale, const std::vector<Tensor*> & values) { \
+    if(values[0]->device->type == DeviceType::CPU) { DAO_ERROR("Update on CPU is not supported with DAO"); } \
+    else if(values[0]->device->type == DeviceType::GPU) { \
+      if (!DAO::async_enabled) {\
+        cudaSetDevice(((Device_GPU*)values[0]->device)->cuda_device_id);\
+        update_rule_dev(*(Device_GPU*)values[0]->device,gscale,values); \
+        return; \
+      } \
+      DAO::Kernel kernel; \
+      kernel.set_name("trainer update"); \
+      kernel.set_impl([this, gscale, values=values](DAO::Kernel*){ \
+        cudaSetDevice(((Device_GPU*)values[0]->device)->cuda_device_id); \
+        update_rule_dev(*(Device_GPU*)values[0]->device,gscale,values);  \
+      });\
+      DAO::push_kernel(std::move(kernel));\
+    } \
+    else { throw std::runtime_error("Bad device in MyTrainer::update_rule"); } \
+  }
+#elif defined(HAVE_CUDA) && !defined(USE_DAO)
 // This is correct, but dying when models are read and written.
 #define DYNET_TRAINER_INST_DEV_IMPL(MyTrainer) \
   extern template void MyTrainer::update_rule_dev<Device_GPU>(const Device_GPU & dev, real gscale, const std::vector<Tensor*> & values); \
@@ -207,13 +234,27 @@ void Trainer::update() {
   // Perform gradient clipping and cycle through parameters
   const float gscale = clip_gradients();
   for(size_t i = 0; i < params.size(); ++i) {
+    assert(params[i]->updated);
     if(params[i]->updated) {
       update_params(gscale, i);
+#ifdef USE_DAO 
+    if (DAO::async_enabled) {
+      DAO::Kernel kernel;
+      kernel.set_name(("clear params " + params[i]->name).c_str());
+      kernel.set_impl([param = params[i]](DAO::Kernel*){param->clear();});
+      DAO::push_kernel(std::move(kernel));
+    }
+    else {
       params[i]->clear();
+    }
+#else 
+      params[i]->clear();
+#endif 
     }
   }
   for(size_t i = 0; i < lparams.size(); ++i) {
     auto &p = lparams[i];
+    assert(p->updated);
     if (p->updated) {
       if(sparse_updates_enabled && !p->all_updated) {
         for (auto j : p->non_zero_grads)
@@ -221,13 +262,27 @@ void Trainer::update() {
       } else {
         update_lookup_params(gscale, i);
       }
+#ifdef USE_DAO
+    if (DAO::async_enabled){
+      DAO::Kernel kernel;
+      kernel.set_name(("clear params " + params[i]->name).c_str());
+      kernel.set_impl([param = p](DAO::Kernel*){param->clear();});
+      DAO::push_kernel(std::move(kernel));
+    } else {
       p->clear();
+    }
+#else 
+      p->clear();
+#endif 
     }
   }
 
   // EMA
   if (moving_average() != MovingAverage::None && static_cast<unsigned int>(updates) % ma_update_freq == 0u)
   {
+#ifdef USE_DAO 
+    DAO_ERROR("moving average is not supported now");
+#endif 
     if (ma_aux_allocated < params.size())
     {
         allocate_shadow_parameters(*model, ma_aux_allocated, ma_p);

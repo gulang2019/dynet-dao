@@ -16,6 +16,10 @@
 #include <device_launch_parameters.h>
 #endif
 
+#ifdef USE_DAO 
+#include <DAO/DAO.h>
+#endif 
+
 using namespace std;
 
 namespace dynet {
@@ -284,6 +288,9 @@ void initialize(DynetParams& params) {
 }
 
 void initialize(int& argc, char**& argv, bool shared_parameters) {
+#ifdef USE_DAO
+  DAO::initialize(argc, argv);
+#endif
   DynetParams params = extract_dynet_params(argc, argv, shared_parameters);
   initialize(params);
 }
