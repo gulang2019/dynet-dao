@@ -28,7 +28,7 @@ cd build
 # Run CMake
 # -DENABLE_BOOST=ON in combination with -DENABLE_CPP_EXAMPLES=ON also
 # compiles the multiprocessing c++ examples
-cmake .. -DEIGEN3_INCLUDE_DIR=/path/to/eigen -DENABLE_CPP_EXAMPLES=ON -DBACKEND=CUDA
+cmake .. -DEIGEN3_INCLUDE_DIR=/path/to/eigen -DENABLE_BOOST=ON -DENABLE_CPP_EXAMPLES=ON -DBACKEND=cuda -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 # Compile using 2 processes
 make -j 2
 # Test with an example
@@ -40,10 +40,14 @@ Run mnist
 # prepare datasets 
 ln -s /ssd1/siyuanch/workspace/dynet-dao/datasets datasets 
 cd build/examples 
-./mnist -t ../../datasets/train-images.idx3-ubyte -d ../../datasets/t10k-images.idx3-ubyte -tl ../../datasets/train-labels.idx1-ubyte -dl ../../datasets/t10k-labels.idx1-ubyte --batch_size 128 -N 20
+./mnist -t ../../datasets/mnist/train-images.idx3-ubyte -d ../../datasets/mnist/t10k-images.idx3-ubyte -tl ../../datasets/mnist/train-labels.idx1-ubyte -dl ../../datasets/mnist/t10k-labels.idx1-ubyte --batch_size 128 -N 20
 ```
 
-Transformer Example: ./examples/transformer
+Transformer Example 
+```
+# cd <repo dir>
+./build/examples/transformer-train -c models/iwslt-envi/config.txt --parameters models/iwslt-envi/en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu &>models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu
+```
 <!-- <div align="center">
   <img alt="DyNet" src="doc/source/images/dynet_logo.png"><br><br>
 </div>
