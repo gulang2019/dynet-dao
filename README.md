@@ -55,6 +55,32 @@ gpt2 Example
 mkdir -p models/gpt2-124M
 build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --reset-if-stuck --use-smaller-minibatch &> models/gpt2-124M/train.log
 ```
+
+Run xor test 
+```bash 
+cd build/dao/tests 
+# run with dao disabled 
+./dao_xor --dao-verbose 0 --dao-disable 
+# run with dao and verbose 
+./dao_xor --dao-verbose 1 
+Sample output
+0, 0, pred: -1
+1, 0, pred: 1
+0, 1, pred: 1
+1, 1, pred: -1
+```
+
+## API design 
+
+- DAO::sync(): synchronize the frontend and backend thread. Only the most recently computed tensor is guaranteed to exist. For example, 
+```
+loss = cg->forward(x)
+DAO::sync();
+float res = as_scalar(loss) # valid
+```
+- DAO::complete(const std::shared_ptr<T>& data): push the shared_ptr of data as a dummy kernel to the queue, so that it would be destructed after the kernel is pulled by the backend thread. 
+
+
 <!-- <div align="center">
   <img alt="DyNet" src="doc/source/images/dynet_logo.png"><br><br>
 </div>
