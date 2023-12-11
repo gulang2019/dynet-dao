@@ -204,10 +204,10 @@ struct MultiHeadAttentionLayer{
 #ifdef MULTI_HEAD_ATTENTION_PARALLEL
 	explicit MultiHeadAttentionLayer(DyNetModel* mod, TransformerConfig& tfc, bool is_future_blinding=false)
 #ifdef USE_LECUN_DIST_PARAM_INIT
-		: _l_W_Q(mod, tfc._num_units, tfc._num_units, false/*linear layer w/o bias*/, true)
-		, _l_W_K(mod, tfc._num_units, tfc._num_units, false, true)
-		, _l_W_V(mod, tfc._num_units, tfc._num_units, false, true)
-		, _l_W_O(mod, tfc._num_units, tfc._num_units, false, true)
+		: _l_W_Q(mod, tfc._num_units, tfc._num_units, true/*gpt2 use bias*/, true)
+		, _l_W_K(mod, tfc._num_units, tfc._num_units, true, true)
+		, _l_W_V(mod, tfc._num_units, tfc._num_units, true, true)
+		, _l_W_O(mod, tfc._num_units, tfc._num_units, true, true)
 #else
 		: _l_W_Q(mod, tfc._num_units, tfc._num_units, false/*linear layer w/o bias*/)
 		, _l_W_K(mod, tfc._num_units, tfc._num_units, false)

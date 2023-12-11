@@ -251,6 +251,7 @@ int main(int argc, char** argv) {
 			std::string line;
 			getline(inpf_cfg, line);
 			std::stringstream ss(line);
+			// TODO: check if the 4 tokens have been accounted for
 			tfc._tgt_vocab_size = d.size();
 			tfc._sm = sm;
 			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
