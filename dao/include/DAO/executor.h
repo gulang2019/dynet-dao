@@ -23,6 +23,15 @@ DAO_API void log (const char* msg);
 DAO_API void initialize(int& argc, char**& argv); 
 DAO_API void begin_profile(const char*);
 DAO_API void end_profile();
+
+template<typename T>
+void complete(const std::shared_ptr<T>& data) {
+  if (!async_enabled) return; 
+  DAO::Kernel kernel;
+  kernel.set_name("complete computation graph");
+  kernel.set_impl([data](DAO::Kernel*){}); 
+  DAO::push_kernel(std::move(kernel));
+}
 // void stop();
 
 } // DAO 
