@@ -52,8 +52,8 @@ Transformer Example
 gpt2 Example
 ```
 # cd <repo dir>
-mkdir -p models/iwslt-envi/lm
-./build/examples/transformer-lm -c models/iwslt-envi/lm/config.txt --reset-if-stuck --use-smaller-minibatch --use-label-smoothing &>models/iwslt-envi/lm/train.log
+mkdir -p models/gpt2-124M
+build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --reset-if-stuck --use-smaller-minibatch &> models/gpt2-124M/train.log
 ```
 <!-- <div align="center">
   <img alt="DyNet" src="doc/source/images/dynet_logo.png"><br><br>
