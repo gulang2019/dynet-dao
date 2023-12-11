@@ -2,7 +2,8 @@
 * Developed by Cong Duy Vu Hoang
 * Updated: 1 Nov 2017
 */
-
+#include <DAO/DAO.h> 
+#include <DAO/interface-dynet.h>
 #include "transformer-lm.h"
 
 using namespace std;
@@ -94,6 +95,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 //************************************************************************************************************************************************************
 int main(int argc, char** argv) {
 	cerr << "*** DyNet initialization ***" << endl;
+	DAO::initialize(argc, argv);
 	auto dyparams = dynet::extract_dynet_params(argc, argv);
 	dynet::initialize(dyparams);	
 
@@ -356,6 +358,7 @@ int main(int argc, char** argv) {
 		report_perplexity_score(v_tf_models, test_cor, MINIBATCH_SIZE);
 	}
 
+    DAO::stop();
 	return EXIT_SUCCESS;
 }
 //************************************************************************************************************************************************************
@@ -649,7 +652,8 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			}
 
 			// build graph for this instance
-			dynet::ComputationGraph cg;// dynamic computation graph for each data batch
+			auto pCg = std::make_shared<dynet::ComputationGraph>();
+			dynet::ComputationGraph& cg = *pCg;// dynamic computation graph for each data batch
 			if (DEBUGGING_FLAG){//http://dynet.readthedocs.io/en/latest/debugging.html
 				cg.set_immediate_compute(true);
 				cg.set_check_validity(true);
@@ -669,6 +673,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			// perform forward computation for aggregate objective
 			cg.forward(i_objective);
 
+            DAO::sync();
 			// grab the parts of the objective
 			float loss = as_scalar(cg.get_value(i_xent.i));
 			if (!is_valid(loss)){
@@ -701,6 +706,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			}
 			   		 
 			++id;
+			DAO::complete(pCg);
 		}
 
 		// show score on dev data?
@@ -729,9 +735,13 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		// batched version (faster)
 		float dloss = 0.f;
 		for (const WordIdSentences& dsentb : dev_cor_minibatch){
-			dynet::ComputationGraph cg;
+			auto pCg = std::make_shared<dynet::ComputationGraph>();
+			dynet::ComputationGraph& cg = *pCg;
 			auto i_xent = tf.build_graph(cg, dsentb, nullptr, true);
-			dloss += as_scalar(cg.incremental_forward(i_xent));
+			const auto &t = cg.incremental_forward(i_xent);
+			DAO::sync();
+			dloss += as_scalar(t);
+			DAO::complete(pCg);
 		}
 		
 		float elapsed = timer_iteration.elapsed();
