@@ -95,7 +95,6 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 //************************************************************************************************************************************************************
 int main(int argc, char** argv) {
 	cerr << "*** DyNet initialization ***" << endl;
-	DAO::initialize(argc, argv);
 	auto dyparams = dynet::extract_dynet_params(argc, argv);
 	dynet::initialize(dyparams);	
 
@@ -358,7 +357,6 @@ int main(int argc, char** argv) {
 		report_perplexity_score(v_tf_models, test_cor, MINIBATCH_SIZE);
 	}
 
-    DAO::stop();
 	return EXIT_SUCCESS;
 }
 //************************************************************************************************************************************************************
@@ -671,11 +669,10 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			Expression i_objective = i_xent;
 
 			// perform forward computation for aggregate objective
-			const auto &t = cg.forward(i_objective);
+			cg.forward(i_objective);
 
-			DAO::sync();
 			// grab the parts of the objective
-			float loss = as_scalar(t);
+			float loss = as_scalar(cg.get_value(i_xent.i));
 			if (!is_valid(loss)){
 				std::cerr << "***Warning***: nan or -nan values occurred!" << std::endl;
 				++id;
@@ -706,9 +703,8 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			}
 			   		 
 			++id;
-			DAO::complete(pCg);
 		}
-
+		goto finish;
 		// show score on dev data?
 		tf.set_dropout(false);// disable dropout for evaluating dev data
 
@@ -735,13 +731,9 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		// batched version (faster)
 		float dloss = 0.f;
 		for (const WordIdSentences& dsentb : dev_cor_minibatch){
-			auto pCg = std::make_shared<dynet::ComputationGraph>();
-			dynet::ComputationGraph& cg = *pCg;
+			dynet::ComputationGraph cg;
 			auto i_xent = tf.build_graph(cg, dsentb, nullptr, true);
-			const auto &t = cg.incremental_forward(i_xent);
-			DAO::sync();
-			dloss += as_scalar(t);
-			DAO::complete(pCg);
+			dloss += as_scalar(cg.incremental_forward(i_xent));
 		}
 		
 		float elapsed = timer_iteration.elapsed();
@@ -816,8 +808,9 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 	}
-
+finish:
 	cerr << endl << "Transformer training completed!" << endl;
+	DAO::profiler.dump(model_path + "/train");
 }
 // ---
 

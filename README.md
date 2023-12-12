@@ -28,7 +28,7 @@ cd build
 # Run CMake
 # -DENABLE_BOOST=ON in combination with -DENABLE_CPP_EXAMPLES=ON also
 # compiles the multiprocessing c++ examples
-cmake .. -DEIGEN3_INCLUDE_DIR=/path/to/eigen -DENABLE_BOOST=ON -DENABLE_CPP_EXAMPLES=ON -DBACKEND=cuda -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake .. -DEIGEN3_INCLUDE_DIR=/path/to/eigen -DENABLE_BOOST=ON -DENABLE_CPP_EXAMPLES=ON -DBACKEND=cuda -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DUSE_DAO=ON
 # Compile using 2 processes
 make -j 2
 # Test with an example
@@ -54,6 +54,7 @@ gpt2 Example
 # cd <repo dir>
 mkdir -p models/gpt2-124M
 build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --reset-if-stuck --use-smaller-minibatch &> models/gpt2-124M/train.log
+build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --reset-if-stuck --use-smaller-minibatch --dao-profile 1
 ```
 
 Run xor test 
@@ -82,7 +83,7 @@ float res = as_scalar(loss) # valid
 
 
 ### Profile Traces
-Add `--dao-profile` to your bash when launching a dynet application to enable tracing of kernels;
+Add `--dao-profile 1` to your bash when launching a dynet application to enable tracing of kernels;
 In your c++ application code, #include <DAO/DAO.h> and use DAO::profiler.dump(std::string name) method to dump the traces into a "name.traces" file. 
 
 

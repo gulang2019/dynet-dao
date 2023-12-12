@@ -46,10 +46,10 @@ struct LMDecoderLayer{
 		, _feed_forward_sublayer(mod, tfc)
 	{	
 		// initialisation for layer normalisation
-		// _p_ln1_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
-		// _p_ln1_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
-		// _p_ln2_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
-		// _p_ln2_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
+		_p_ln1_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
+		_p_ln1_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
+		_p_ln2_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
+		_p_ln2_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
 
 		_p_tfc = &tfc;
 	}
@@ -74,10 +74,10 @@ struct LMDecoderLayer{
 		, const MaskBase& self_mask)
 	{	
 		// get expressions for layer normalisation, e.g., i_ln1_g, i_ln1_b, i_ln2_g, i_ln2_b, i_ln3_g, i_ln3_b
-		// dynet::Expression i_ln1_g = dynet::parameter(cg, _p_ln1_g);
-		// dynet::Expression i_ln1_b = dynet::parameter(cg, _p_ln1_b);
-		// dynet::Expression i_ln2_g = dynet::parameter(cg, _p_ln2_g);
-		// dynet::Expression i_ln2_b = dynet::parameter(cg, _p_ln2_b);
+		dynet::Expression i_ln1_g = dynet::parameter(cg, _p_ln1_g);
+		dynet::Expression i_ln1_b = dynet::parameter(cg, _p_ln1_b);
+		dynet::Expression i_ln2_g = dynet::parameter(cg, _p_ln2_g);
+		dynet::Expression i_ln2_b = dynet::parameter(cg, _p_ln2_b);
 	
 		dynet::Expression i_decl = i_dec_inp;
 		//! dynet::dropout apply scaling at training time
@@ -86,16 +86,14 @@ struct LMDecoderLayer{
 		if (_p_tfc->_use_dropout) { // training
 			if (rand01() > _p_tfc->_attention_dropout_rate) {
 				// layer normalisation 1 (prenorm)
-				dynet::Expression i_ln = i_decl;// ((num_units, Ly), batch_size)
-				// dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
+				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 				// multi-head self attention sub-layer
 				i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
 				// element-wise dropout applied within attn sublayer
 			}
 			i_mh_self_att = i_mh_self_att / (1-_p_tfc->_attention_dropout_rate);
 		} else { // inference
-			dynet::Expression i_ln = i_decl;// ((num_units, Ly), batch_size)
-			// dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
+			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 			i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
 		}
 
@@ -106,15 +104,13 @@ struct LMDecoderLayer{
 		if (_p_tfc->_use_dropout) { // training
 			if (rand01() > _p_tfc->_ff_dropout_rate) {
 				// layer normalisation 3 (prenorm)
-				dynet::Expression i_ln = i_decl;// ((num_units, Ly), batch_size)
-				// dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
+				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 				// position-wise feed-forward sub-layer
 				i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
 			}
 			i_ff = i_ff / (1-_p_tfc->_ff_dropout_rate);
 		} else { // inference
-			dynet::Expression i_ln = i_decl;// ((num_units, Ly), batch_size)
-			// dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
+			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 			i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
 		}
 
@@ -459,8 +455,8 @@ TransformerLModel::TransformerLModel(const TransformerConfig& tfc, dynet::Dict& 
 	_decoder.reset(new LMDecoder(_all_params.get(), _tfc));// create new decoder object
 
 	// final LayerNorm
-	// _p_lnf_g = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(1.f));
-	// _p_lnf_b = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(0.f));
+	_p_lnf_g = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(1.f));
+	_p_lnf_b = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(0.f));
 
 	// dictionaries
 	_dict = d;
@@ -475,9 +471,9 @@ dynet::Expression TransformerLModel::step_forward(dynet::ComputationGraph &cg
 	// IMPROVEMENT: during decoding, some parts in partial_sent will be recomputed. This is wasteful, especially for beam search decoding.
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, partial_sents);
 
-	// dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
-	// dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
-	// i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
 
 	dynet::Expression i_tgt_t;
 	if (partial_sents[0].size() == 1) i_tgt_t = i_tgt_ctx;
@@ -505,9 +501,9 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
 
-	// dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
-	// dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
-	// i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
 
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 	dynet::Expression i_r = i_Wo_emb_tgt * i_tgt_ctx;// ((|V_T|, (Ly-1)), batch_size)
@@ -558,9 +554,9 @@ void TransformerLModel::get_avg_ll(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
 
-	// dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
-	// dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
-	// i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
 
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 	dynet::Expression i_r = i_Wo_emb_tgt * i_tgt_ctx;// ((|V_T|, (Ly-1)), batch_size)
@@ -599,9 +595,9 @@ void TransformerLModel::get_avg_ll(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
 
-	// dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
-	// dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
-	// i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
 
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 	dynet::Expression i_r = i_Wo_emb_tgt * i_tgt_ctx;// ((|V_T|, (Ly-1)), batch_size)
@@ -634,9 +630,9 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, v_soft_ssents);// ((num_units, Ly), batch_size)
 
-	// dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
-	// dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
-	// i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
+	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
+	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
+	i_tgt_ctx = layer_norm_colwise_3(i_tgt_ctx, i_lnf_g, i_lnf_b);
 
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 	dynet::Expression i_r = i_Wo_emb_tgt * i_tgt_ctx;// ((|V_T|, (Ly-1)), batch_size)
