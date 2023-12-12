@@ -588,23 +588,7 @@ void ParameterStorage::scale_parameters_dev(MyDevice & dev, float a) {
 }
 #ifdef __CUDACC__
 template void ParameterStorage::scale_parameters_dev<Device_GPU>(Device_GPU & dev, float a);
-#elif defined(HAVE_CUDA) && defined(USE_DAO)
-extern template void ParameterStorage::scale_parameters_dev<Device_GPU>(Device_GPU & dev, float a);
-template void ParameterStorage::scale_parameters_dev<Device_CPU>(Device_CPU & dev, float a);
-void ParameterStorage::scale_parameters(float a) {
-  if (values.device->type == DeviceType::CPU) { DAO_INFO("scale params on CPU is not supported by DAO"); } 
-  else if (values.device->type == DeviceType::GPU) { 
-    if (DAO::async_enabled) {
-      DAO::Kernel kernel;
-      kernel.set_name("scale params").set_impl([this, a](DAO::Kernel*){
-        scale_parameters_dev(*(Device_GPU*)values.device, a);
-      });
-      DAO::push_kernel(std::move(kernel));
-    }
-    else scale_parameters_dev(*(Device_GPU*)values.device, a); }
-  else { throw std::runtime_error("Bad device type"); }
-}
-#elif defined(HAVE_CUDA) && !defined(USE_DAO)
+#elif defined(HAVE_CUDA) 
 extern template void ParameterStorage::scale_parameters_dev<Device_GPU>(Device_GPU & dev, float a);
 template void ParameterStorage::scale_parameters_dev<Device_CPU>(Device_CPU & dev, float a);
 void ParameterStorage::scale_parameters(float a) {
@@ -785,23 +769,7 @@ void LookupParameterStorage::scale_parameters_dev(MyDevice & dev, float a) {
 }
 #ifdef __CUDACC__
 template void LookupParameterStorage::scale_parameters_dev<Device_GPU>(Device_GPU & dev, float a);
-#elif defined(HAVE_CUDA) && defined(USE_DAO)
-extern template void LookupParameterStorage::scale_parameters_dev<Device_GPU>(Device_GPU & dev, float a);
-template void LookupParameterStorage::scale_parameters_dev<Device_CPU>(Device_CPU & dev, float a);
-void LookupParameterStorage::scale_parameters(float a) {
-  if (values[0].device->type == DeviceType::CPU) { DAO_INFO("scale params on CPU is not supported by DAO"); } 
-  else if (values[0].device->type == DeviceType::GPU) { 
-    if (DAO::async_enabled) {
-      DAO::Kernel kernel;
-      kernel.set_name("scale params").set_impl([this, a](DAO::Kernel*){
-        scale_parameters_dev(*(Device_GPU*)values[0].device, a);
-      });
-      DAO::push_kernel(std::move(kernel));
-    }
-    else scale_parameters_dev(*(Device_GPU*)values[0].device, a); }
-  else { throw std::runtime_error("Bad device type"); }
-}
-#elif defined(HAVE_CUDA) && !defined(USE_DAO)
+#elif defined(HAVE_CUDA) 
 extern template void LookupParameterStorage::scale_parameters_dev<Device_GPU>(Device_GPU & dev, float a);
 template void LookupParameterStorage::scale_parameters_dev<Device_CPU>(Device_CPU & dev, float a);
 void LookupParameterStorage::scale_parameters(float a) {

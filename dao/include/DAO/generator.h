@@ -18,6 +18,7 @@ struct Kernel {
   std::function<void(Kernel*)> _impl;
   std::vector<TensorUID> _inputs;
   std::vector<TensorUID> _outputs;  
+  std::vector<TensorUID> _free_list;
   std::string _name = ""; 
   pid_t _tid = 0;
   bool _stop = false; 
@@ -36,6 +37,12 @@ struct Kernel {
   template<typename... Args>
   Kernel& set_outputs(Args...args) {
     (_outputs.push_back(args), ...);
+    return (*this);
+  }
+  
+  template<typename... Args>
+  Kernel& set_free(Args...args) {
+    (_free_list.push_back(args), ...);
     return (*this);
   }
 

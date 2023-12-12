@@ -83,6 +83,7 @@ const Tensor& AsyncExecutionEngine::incremental_forward(VariableIndex i) {
           ++ai;
         }
         std::shared_ptr<Tensor>& node_fx = nfxs[num_nodes_evaluated] = std::make_shared<Tensor>();
+        node_fx->name = "FWD " + node->as_dummy_string();
         node_fx->d = node->dim; 
         DYNET_ASSERT(node->device != nullptr,
           "Attempt to access null device in "
@@ -91,15 +92,20 @@ const Tensor& AsyncExecutionEngine::incremental_forward(VariableIndex i) {
         node_fx->mem_pool = DeviceMempool::FXS;
         DAO::Kernel kernel;
         kernel.set_name(("FWD " + node->as_dummy_string()).c_str());
+        kernel.set_outputs(node_fx.get());
+        for(auto& x: xs) kernel.set_inputs(x.get());
         kernel.set_impl([node, node_fx, xs, idx=num_nodes_evaluated](Kernel*){
             auto& node_fx_pools = node_fx->device->pools;
-            node_fx->v = static_cast<float*>(
-            node_fx_pools[(int)DeviceMempool::FXS]->allocate(
-                node->dim.size() * sizeof(float)));
-            if (node_fx->v == nullptr) {
-            DYNET_RUNTIME_ERR("Ran out of memory when executing node " <<
-                                idx << ", allocating FWD memory.");
-            }
+            // node_fx->v = static_cast<float*>(
+            // node_fx_pools[(int)DeviceMempool::FXS]->allocate(
+            //     node->dim.size() * sizeof(float)));
+            DAO_ASSERT(node_fx->v, "node_fx->v is null");
+            for (auto& x: xs) 
+              DAO_ASSERT(x!= nullptr && x->v, "xs[i]->v is null");
+            // if (node_fx->v == nullptr) {
+            // DYNET_RUNTIME_ERR("Ran out of memory when executing node " <<
+            //                     idx << ", allocating FWD memory.");
+            // }
             void* aux_mem = nullptr;
             // Is the node requesting extra memory?
             size_t aux_size = node->aux_storage_size();
@@ -170,6 +176,23 @@ void AsyncExecutionEngine::backward(VariableIndex from_where, bool full) {
         in_computation[arg] = true;
   }
 
+  // {
+  //   DAO::Kernel kernel;
+  //   kernel.set_name("free");
+  //   for (int i = 0; i < num_nodes; ++i) {
+  //     if (in_computation[i] 
+  //       || cg.nodes[i]->forward_inplaced()
+  //       || needs_derivative[i]) continue;
+  //     if (nfxs[i] != nullptr) {
+  //       kernel.set_free(nfxs[i].get());
+  //     }
+  //   }
+  //   kernel.set_impl([](DAO::Kernel*){
+  //     // do nothing
+  //   });
+  //   DAO::push_kernel(std::move(kernel));    
+  // }
+
   ndEdfs.resize(num_nodes, nullptr);
   vector<std::shared_ptr<Tensor> > xs(16, nullptr);  // Container for arguments to nodes (reused).
   for (int i = num_nodes - 1; i >= 0; --i) {
@@ -180,14 +203,18 @@ void AsyncExecutionEngine::backward(VariableIndex from_where, bool full) {
     xs.resize(node->arity());
     assert(xs.size() == node->arity());
     vector<VariableIndex> args; 
+    vector<unsigned> ais;
     unsigned ai = 0;
     for (auto arg: node->args) {
       for (auto child_node = cg.nodes[arg]; child_node->forward_inplaced(); ){
         arg = child_node->args[0];
         child_node = cg.nodes[arg];
       }
-      xs[ai++] = nfxs[arg];
-      args.push_back(arg);
+      if (needs_derivative[arg]) {
+        args.push_back(arg);
+        ais.push_back(ai);
+      }
+      xs[ai++] = nfxs[arg];      
     }
     auto& node_ndEdfx = ndEdfs[i];
     if (node_ndEdfx == nullptr) {
@@ -198,44 +225,54 @@ void AsyncExecutionEngine::backward(VariableIndex from_where, bool full) {
       node_ndEdfx->v = nullptr;
       if (i == from_where) 
         node_ndEdfx->v = nfxs[i]->device->kSCALAR_ONE;
+      node_ndEdfx->name = "BWD " + cg.nodes[i]->as_dummy_string();
     }
-    ai = 0;
-    for (auto arg: args) {
-      if (needs_derivative[arg]) {
-        auto& node_dEdxai = ndEdfs[arg];  // where to store dE/dx_{ai}.
-        if (node_dEdxai == nullptr) {
-          node_dEdxai = std::make_shared<Tensor>();
-          node_dEdxai->v = nullptr;
-          node_dEdxai->d = nfxs[arg]->d;
-          node_dEdxai->device = nfxs[arg]->device;
-          node_dEdxai->mem_pool = DeviceMempool::DEDFS;
-        }
-        DAO::Kernel kernel;
-        kernel.set_name(("BWD " + node->as_dummy_string()).c_str());
-        kernel.set_impl([
-          node,
-          xs,
-          node_fx = nfxs[i], 
-          node_dEdfx = ndEdfs[i], 
-          ai, 
-          node_dEdxai = ndEdfs[arg]](DAO::Kernel*){
-            
-            for (auto& ptr: {node_dEdfx, node_dEdxai})
-            if (ptr->v == nullptr) {
-              ptr->v = static_cast<float*>(
-                ptr->device->pools[(int)DeviceMempool::DEDFS]->allocate(
-                    ptr->d.size() * sizeof(float)));
-            }
-            vector<const Tensor*> xs_;
-            for (auto& x: xs) {
-              DAO_ASSERT(x != nullptr, "Out-of-bounds variable access in AsyncExecutionEngine::backward()");
-              xs_.push_back(x.get());
-            }
-            node->backward(xs_, *node_fx, *node_dEdfx, ai, *node_dEdxai);
-        });
-        DAO::push_kernel(std::move(kernel));
+    for (unsigned j = 0; j < args.size(); ++j) {
+      auto arg = args[j];
+      auto ai = ais[j];
+      auto& node_dEdxai = ndEdfs[arg];  // where to store dE/dx_{ai}.
+      if (node_dEdxai == nullptr) {
+        node_dEdxai = std::make_shared<Tensor>();
+        node_dEdxai->v = nullptr;
+        node_dEdxai->d = nfxs[arg]->d;
+        node_dEdxai->device = nfxs[arg]->device;
+        node_dEdxai->mem_pool = DeviceMempool::DEDFS;
+        node_dEdxai->name = "BWD " + cg.nodes[arg]->as_dummy_string();
       }
-      ai++;
+      DAO::Kernel kernel;
+      kernel.set_name(("BWD " + node->as_dummy_string()).c_str());
+      for (auto& x: xs) kernel.set_inputs(x.get());
+      kernel.set_inputs(nfxs[i].get(), node_dEdfx.get());
+      kernel.set_outputs(node_dEdxai.get());
+      if (j == args.size() - 1)
+        kernel.set_free(nfxs[i].get(), node_dEdfx.get()); // free the memory at last compute
+      kernel.set_impl([
+        node,
+        xs,
+        node_fx = nfxs[i], 
+        node_dEdfx = ndEdfs[i], 
+        ai, 
+        node_dEdxai = ndEdfs[arg]](DAO::Kernel*){
+          for (auto & ptr: {node_dEdfx, node_dEdxai, node_fx}) {
+            DAO_ASSERT(ptr != nullptr && ptr->v !=nullptr, "Backward nullptr detected");
+          }
+          for (auto& x: xs) {
+            DAO_ASSERT(x != nullptr && x->v != nullptr, "Backward nullptr detected");
+          }
+          // for (auto& ptr: {node_dEdfx, node_dEdxai})
+          // if (ptr->v == nullptr) {
+          //   ptr->v = static_cast<float*>(
+          //     ptr->device->pools[(int)DeviceMempool::DEDFS]->allocate(
+          //         ptr->d.size() * sizeof(float)));
+          // }
+          vector<const Tensor*> xs_;
+          for (auto& x: xs) {
+            DAO_ASSERT(x != nullptr, "Out-of-bounds variable access in AsyncExecutionEngine::backward()");
+            xs_.push_back(x.get());
+          }
+          node->backward(xs_, *node_fx, *node_dEdfx, ai, *node_dEdxai);
+      });
+      DAO::push_kernel(std::move(kernel));
     }
   }
 
@@ -249,6 +286,8 @@ void AsyncExecutionEngine::backward(VariableIndex from_where, bool full) {
       std::ostringstream s;
       s << "ACCUMULATE GRADIENTS " << cg.nodes[i]->as_dummy_string() << " " << i;
       kernel.set_name(s.str().c_str());
+      kernel.set_inputs(node_ndEdf.get());
+      kernel.set_free(node_ndEdf.get());
       kernel.set_impl([node = cg.nodes[i], node_ndEdf](DAO::Kernel*){
         dynet::ParameterNodeBase* pnode = static_cast<dynet::ParameterNodeBase*>(node);
         pnode->accumulate_grad(*node_ndEdf);
@@ -257,14 +296,6 @@ void AsyncExecutionEngine::backward(VariableIndex from_where, bool full) {
     }
   }
   backward_computed = from_where+1;
-}
-
-void complete(const std::shared_ptr<ComputationGraph>& cg) {
-  if (!async_enabled) return; 
-  DAO::Kernel kernel;
-  kernel.set_name("complete computation graph");
-  kernel.set_impl([cg](DAO::Kernel*){}); 
-  DAO::push_kernel(std::move(kernel));
 }
 
 } // namespace DAO 

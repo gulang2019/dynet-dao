@@ -7,6 +7,10 @@
 #include "dynet/str-util.h"
 #include "dynet/devices.h"
 
+#ifdef USE_DAO 
+#include <DAO/DAO.h>
+#endif 
+
 #include <iostream>
 #include <random>
 #include <cmath>
@@ -103,18 +107,88 @@ DynetParams extract_dynet_params(int& argc,
       }
     }
 
+#ifdef USE_DAO 
     // Weight decay
-    else if (startswith(arg, "--dynet-weight-decay") ||
-             startswith(arg, "--dynet_weight_decay")) {
+    else if (startswith(arg, "--dao-enable-async") ||
+             startswith(arg, "--dao_enable_async")) {
       if (!has_arg(argi, argc, argv)) {
-        throw std::invalid_argument("[dynet] --dynet-weight-decay requires an argument (the weight decay per update)");
+        throw std::invalid_argument("--dao_enable_async");
       } else {
         string a2 = get_arg(argi, argv);
-        istringstream d(a2); d >> params.weight_decay;
+        istringstream d(a2); d >> DAO::async_enabled; 
         remove_args(argc, argv, argi, 2);
       }
     }
 
+    else if (startswith(arg, "--dao-verbose") ||
+             startswith(arg, "--dao_verbose")) {
+      if (!has_arg(argi, argc, argv)) {
+        throw std::invalid_argument("--dao_verbose");
+      } else {
+        string a2 = get_arg(argi, argv);
+        istringstream d(a2); d >> DAO::verbose; 
+        remove_args(argc, argv, argi, 2);
+      }
+    }
+
+    // Weight decay
+    else if (startswith(arg, "--dao-enable-offload") ||
+             startswith(arg, "--dao_enable_offload")) {
+      if (!has_arg(argi, argc, argv)) {
+        throw std::invalid_argument("--dao_enable_offload");
+      } else {
+        string a2 = get_arg(argi, argv);
+        istringstream d(a2); d >> DAO::offload_enabled;
+        remove_args(argc, argv, argi, 2);
+      }
+    }
+
+    else if (startswith(arg, "--dao-cpu-mem-limit") ||
+             startswith(arg, "--dao_cpu_mem_limit")) {
+      if (!has_arg(argi, argc, argv)) {
+        throw std::invalid_argument("--dao_enable_offload");
+      } else {
+        string a2 = get_arg(argi, argv);
+        istringstream d(a2); d >> DAO::cpu_mem_limit;
+        remove_args(argc, argv, argi, 2);
+      }
+    }
+
+    else if (startswith(arg, "--dao-cpu-mem") ||
+             startswith(arg, "--dao_cpu_mem")) {
+      if (!has_arg(argi, argc, argv)) {
+        throw std::invalid_argument("--dao_enable_offload");
+      } else {
+        string a2 = get_arg(argi, argv);
+        istringstream d(a2); d >> DAO::cpu_mem;
+        remove_args(argc, argv, argi, 2);
+      }
+    }
+
+    else if (startswith(arg, "--dao-gpu-mem-limit") ||
+             startswith(arg, "--dao_gpu_mem_limit")) {
+      if (!has_arg(argi, argc, argv)) {
+        throw std::invalid_argument("--dao_enable_offload");
+      } else {
+        string a2 = get_arg(argi, argv);
+        istringstream d(a2); d >> DAO::gpu_mem_limit;
+        remove_args(argc, argv, argi, 2);
+      }
+    }
+
+    else if (startswith(arg, "--dao-gpu-mem") ||
+             startswith(arg, "--dao_gpu_mem")) {
+      if (!has_arg(argi, argc, argv)) {
+        throw std::invalid_argument("--dao_enable_offload");
+      } else {
+        string a2 = get_arg(argi, argv);
+        istringstream d(a2); d >> DAO::gpu_mem;
+        remove_args(argc, argv, argi, 2);
+      }
+    }
+
+    
+#endif 
     // Random seed
     else if (startswith(arg, "--dynet-seed") ||
              startswith(arg, "--dynet_seed")) {
@@ -288,11 +362,11 @@ void initialize(DynetParams& params) {
 }
 
 void initialize(int& argc, char**& argv, bool shared_parameters) {
-#ifdef USE_DAO
-  DAO::initialize(argc, argv);
-#endif
   DynetParams params = extract_dynet_params(argc, argv, shared_parameters);
   initialize(params);
+#ifdef USE_DAO 
+  DAO::initialize(argc, argv); 
+#endif 
 }
 
 void cleanup() {

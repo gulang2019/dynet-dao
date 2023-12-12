@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <sstream>
+#include <string>
 
 #include <DAO/executor.h>
 #include <DAO/generator.h>
@@ -16,11 +18,17 @@ namespace DAO {
 extern ConcurrentQueue<Kernel> kernel_queue;
 extern ConcurrentCounter kernel_counter;
 extern ConcurrentValue<pid_t> executor_tid;
-
+extern std::unique_ptr<Allocator> offload_allocator;
 static std::thread executor_thread;
 
+logical_time_t backend_logical_time = 0;
+
+Executor::Executor(ConcurrentQueue<Kernel>& kernel_queue) : kernel_queue_(kernel_queue) {
+  allocator = std::make_unique<Allocator>();
+}
+
 void Executor::run() {
-  while (true) {    
+  while (true) {
     Kernel kernel = kernel_queue_.pop();
     DAO_INFO("Executor: %s, %d, %d in kernel_queue", kernel._name.c_str(), kernel._tid, kernel_queue.size());
     if (kernel.is_stop()) {
@@ -31,8 +39,13 @@ void Executor::run() {
       }
       break;
     }
+    allocator->prepare(kernel);
+    allocator->display(std::cout);
     kernel._impl(&kernel); 
+    allocator->complete(kernel);
     kernel_counter.decrement();
+    backend_logical_time++;
+    cudaDeviceSynchronize();
   }
 }
 
@@ -88,21 +101,15 @@ void log(const char* msg) {
 }
 
 void initialize(int& argc, char**& argv) {
-  int new_argc = 1;
-  int i = 1;
-  while(i < argc) {
-      if (strcmp(argv[i], "--dao-disable") == 0) {
-          async_enabled = false; 
-      } else if (strcmp(argv[i], "--dao-verbose") == 0) {
-          verbose = std::stoi(argv[i+1]);
-          i += 1;
-      }
-      else {
-        argv[new_argc++] = argv[i];
-      }
-      i++; 
+  DAO_INFO("DAO initialized");
+  if (offload_enabled) {
+    // offload_allocator = std::make_unique<Allocator>(
+    //   cpu_mem,
+    //   gpu_mem,
+    //   cpu_mem_limit,
+    //   gpu_mem_limit
+    // );
   }
-  argc = new_argc;
   if (async_enabled)
       launch();
 }

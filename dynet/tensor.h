@@ -23,6 +23,8 @@
 #include "dynet/cuda.h"
 #endif
 
+#include <string>
+
 namespace dynet {
 
 struct IndexTensor;
@@ -127,6 +129,7 @@ struct Tensor {
   float* v;  /**< Pointer to memory */
   Device* device;
   DeviceMempool mem_pool;
+  std::string name; 
 };
 
 /**

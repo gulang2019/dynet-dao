@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <unistd.h>
+#include <cuda_runtime.h>
 
 #include <dynet/dynet.h>
 
@@ -18,14 +19,23 @@
 namespace DAO {
 
 typedef dynet::Tensor* TensorUID; 
-typedef unsigned logical_time_t;
+typedef size_t logical_time_t;
 
 #define DAO_EXPORT __attribute__((__visibility__("default")))
 #define DAO_HIDDEN __attribute__((__visibility__("hidden")))
 #define DAO_API DAO_EXPORT
 
+#define GPU_MEM_SIZE (128*1024*1024)
+#define CPU_MEM_SIZE (128*1024*1024)
+
 extern int verbose; 
 extern bool async_enabled; 
+extern bool offload_enabled;
+extern size_t gpu_mem_limit; 
+extern size_t cpu_mem_limit;
+extern size_t gpu_mem; 
+extern size_t cpu_mem;
+extern cudaStream_t default_stream;
 
 #define PRINT_MSG(...) do{printf(ANSI_COLOR_MAGENTA "%s:%d,%d " ANSI_COLOR_RESET, __FILE__, __LINE__,gettid()); printf(__VA_ARGS__); printf("\n");}while(0)
 #define DAO_INFO(...) do{ if (DAO::verbose) { printf(ANSI_COLOR_GREEN "[DAO::INFO]:\t" ANSI_COLOR_RESET); PRINT_MSG(__VA_ARGS__); }} while(0)

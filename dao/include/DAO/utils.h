@@ -59,7 +59,6 @@ class ConcurrentQueue {
       // DAO_INFO("ConcurrentQueue::push(): queue is full, wait");
        cond_.wait(mlock);
     }
-    DAO_INFO("push kernel: %s, tid %d", item._name.c_str(), gettid());
     queue_.push(item);
     mlock.unlock();
     cond_.notify_one();
@@ -71,7 +70,6 @@ class ConcurrentQueue {
       // DAO_INFO("ConcurrentQueue::push(): queue is full, wait");
        cond_.wait(mlock);
     }
-    DAO_INFO("push kernel: %s, tid %d", item._name.c_str(), gettid());
     queue_.push(item);
     mlock.unlock();
     cond_.notify_one();

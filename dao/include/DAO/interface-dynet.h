@@ -5,6 +5,7 @@
 #include <deque>
 
 #include "DAO/globals.h"
+#include "DAO/allocator.h"
 
 #include "dynet/dynet.h" 
 #include "dynet/exec.h"
@@ -37,11 +38,30 @@ public:
   std::vector<std::shared_ptr<Tensor> > nfxs; 
   std::deque<std::shared_ptr<Tensor> > ndEdfs;
 };
+
+class OffloadExecutionEngine : public ExecutionEngine {
+ public:
+  explicit OffloadExecutionEngine(const ComputationGraph& cg); 
+  void invalidate() override;
+  void invalidate(unsigned i) override;
+  const Tensor& forward() override;
+  const Tensor& forward(VariableIndex i) override;
+  const Tensor& incremental_forward() override;
+  const Tensor& incremental_forward(VariableIndex i) override;
+  const Tensor& get_value(VariableIndex i) override;
+  const Tensor& get_gradient(VariableIndex i) override;
+  void backward(bool full = false) override;
+  void backward(VariableIndex from_where, bool full = false) override;
+ private:
+  std::vector<Tensor> nfxs;
+  std::vector<Tensor> ndEdfs;
+  VariableIndex num_nodes_evaluated;
+  static Allocator* allocator; 
+};
 /**
  * this function will automatically release the computation graph after 
  * previous computation is done 
 */
-void complete(const std::shared_ptr<ComputationGraph>& cg);
 
 } // namespace DAO 
 

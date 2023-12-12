@@ -113,6 +113,8 @@ Device_GPU::Device_GPU(int my_id, const DeviceMempoolSizes & mbs,
   estream = new Eigen::CudaStreamDevice(device_id);
   edevice = new Eigen::GpuDevice(estream);
 
+  printf("Device stream %d: ", estream->stream());
+
   // this is the big memory allocation.
   pools[0] = new AlignedMemoryPool("GPU forward memory", (mbs.used[0] << 20), &gpu_mem);
   pools[1] = new AlignedMemoryPool("GPU backward memory", (mbs.used[1] << 20), &gpu_mem);

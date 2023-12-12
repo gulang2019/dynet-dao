@@ -77,6 +77,10 @@ ComputationGraph::ComputationGraph() {
     DAO_INFO("Using AsyncExecutionEngine");
     ee.reset(new DAO::AsyncExecutionEngine(*this));
   }
+  else if (DAO::offload_enabled) {
+    DAO_INFO("Using offloadExecutionEngine");
+    ee.reset(new DAO::OffloadExecutionEngine(*this));
+  }
   else {
     DAO_INFO("Using SimpleExecutionEngine");
     ee.reset(new SimpleExecutionEngine(*this));

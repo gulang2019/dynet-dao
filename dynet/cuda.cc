@@ -8,6 +8,10 @@
 #include "dynet/globals.h"
 #include "dynet/devices.h"
 
+#ifdef USE_DAO 
+#include <DAO/globals.h>
+#endif 
+
 using namespace std;
 
 namespace dynet {
@@ -91,6 +95,7 @@ vector<Device*> initialize_gpu(DynetParams& params) {
     cerr << ' ' << gpus[i];
     Device* d = new Device_GPU(gpudevices.size(), params.mem_descriptor,
                                gpus[i], params.random_seed);
+    DAO::default_stream = static_cast<Device_GPU*>(d)->estream->stream();
     gpudevices.push_back(d);
   }
   cerr << endl;

@@ -4,14 +4,17 @@
 #include <DAO/generator.h>
 #include <DAO/utils.h>
 #include <DAO/globals.h>
+#include <DAO/allocator.h>
 
 namespace DAO {
 class Executor {
+    
 public: 
-    Executor(ConcurrentQueue<Kernel>& kernel_queue) : kernel_queue_(kernel_queue) {}
+    Executor(ConcurrentQueue<Kernel>& kernel_queue);
     void run();
 private: 
     ConcurrentQueue<Kernel>& kernel_queue_;
+    std::unique_ptr<Allocator> allocator = nullptr;
 };
 
 DAO_API void launch();
@@ -23,6 +26,8 @@ DAO_API void log (const char* msg);
 DAO_API void initialize(int& argc, char**& argv); 
 DAO_API void begin_profile(const char*);
 DAO_API void end_profile();
+
+extern logical_time_t backend_logical_time;
 
 template<typename T>
 void complete(const std::shared_ptr<T>& data) {

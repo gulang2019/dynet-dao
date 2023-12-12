@@ -307,6 +307,8 @@ if (USE_DAO)
   target_include_directories(dao PRIVATE ${DAO_INCLUDE_DIR})
   target_include_directories(dynet PRIVATE ${DAO_INCLUDE_DIR})
   target_link_libraries(dynet dao)
+  set_target_properties(dao PROPERTIES
+                        COMPILE_DEFINITIONS HAVE_CUDA)
 endif()
 
 install(FILES ${dynet_library_HDRS} DESTINATION include/dynet)

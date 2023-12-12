@@ -18,30 +18,7 @@ static const int FLOAT32_PRECISION = 8;
 #ifdef __CUDACC__
 #define DYNET_TRAINER_INST_DEV_IMPL(MyTrainer) \
   template void MyTrainer::update_rule_dev<Device_GPU>(const Device_GPU & dev, real gscale, const std::vector<Tensor*> & values);
-#elif defined(HAVE_CUDA) && defined(USE_DAO)
-// This is correct, but dying when models are read and written.
-#define DYNET_TRAINER_INST_DEV_IMPL(MyTrainer) \
-  extern template void MyTrainer::update_rule_dev<Device_GPU>(const Device_GPU & dev, real gscale, const std::vector<Tensor*> & values); \
-  template void MyTrainer::update_rule_dev<Device_CPU>(const Device_CPU & dev, real gscale, const std::vector<Tensor*> & values); \
-  void MyTrainer::update_rule(real gscale, const std::vector<Tensor*> & values) { \
-    if(values[0]->device->type == DeviceType::CPU) { DAO_ERROR("Update on CPU is not supported with DAO"); } \
-    else if(values[0]->device->type == DeviceType::GPU) { \
-      if (!DAO::async_enabled) {\
-        cudaSetDevice(((Device_GPU*)values[0]->device)->cuda_device_id);\
-        update_rule_dev(*(Device_GPU*)values[0]->device,gscale,values); \
-        return; \
-      } \
-      DAO::Kernel kernel; \
-      kernel.set_name("trainer update"); \
-      kernel.set_impl([this, gscale, values=values](DAO::Kernel*){ \
-        cudaSetDevice(((Device_GPU*)values[0]->device)->cuda_device_id); \
-        update_rule_dev(*(Device_GPU*)values[0]->device,gscale,values);  \
-      });\
-      DAO::push_kernel(std::move(kernel));\
-    } \
-    else { throw std::runtime_error("Bad device in MyTrainer::update_rule"); } \
-  }
-#elif defined(HAVE_CUDA) && !defined(USE_DAO)
+#elif defined(HAVE_CUDA) 
 // This is correct, but dying when models are read and written.
 #define DYNET_TRAINER_INST_DEV_IMPL(MyTrainer) \
   extern template void MyTrainer::update_rule_dev<Device_GPU>(const Device_GPU & dev, real gscale, const std::vector<Tensor*> & values); \
