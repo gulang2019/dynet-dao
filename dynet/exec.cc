@@ -12,6 +12,10 @@
 #include "dynet/gpu-ops.h"
 #endif
 
+#ifdef USE_DAO 
+#include "DAO/DAO.h"
+#endif 
+
 using namespace std;
 
 namespace dynet {
@@ -147,7 +151,18 @@ const Tensor& SimpleExecutionEngine::incremental_forward(VariableIndex i) {
         node->aux_mem = aux_mem;
 
         // Compute f(xs) and store to node_fx.
+#ifdef USE_DAO
+        if (DAO::profile_enabled){
+          DAO::profiler.set_tensors(xs).set_tensors(&node_fx);
+          DAO::profiler.start();
+        }
+#endif 
         node->forward(xs, node_fx);
+#ifdef USE_DAO 
+        if(DAO::profile_enabled){
+          DAO::profiler.stop();
+        }
+#endif 
       }
 
       if (profiling_flag) { timer.stop(current_node_name); }
@@ -265,7 +280,18 @@ void SimpleExecutionEngine::backward(VariableIndex from_where, bool full) {
           DYNET_ASSERT(node_fx.device == node_dEdfx.device &&
                        node_fx.device == node_dEdxai.device,
                        "Attempt to do tensor backward in different devices");
+#ifdef USE_DAO
+          if(DAO::profile_enabled){
+            DAO::profiler.set_tensors(xs).set_tensors(&node_fx).set_tensors(&node_dEdfx).set_tensors(&node_dEdxai);
+            DAO::profiler.start();
+          }
+#endif 
           node->backward(xs, node_fx, node_dEdfx, ai, node_dEdxai);
+#ifdef USE_DAO
+          if(DAO::profile_enabled){
+            DAO::profiler.stop();
+          }
+#endif
         }
         ++ai;
       }

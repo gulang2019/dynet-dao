@@ -26,8 +26,11 @@ static const int FLOAT32_PRECISION = 8;
   void MyTrainer::update_rule(real gscale, const std::vector<Tensor*> & values) { \
     if(values[0]->device->type == DeviceType::CPU) { update_rule_dev(*(Device_CPU*)values[0]->device,gscale,values); } \
     else if(values[0]->device->type == DeviceType::GPU) { \
+    if (DAO::profile_enabled) {DAO::profiler.set_tensors(values);DAO::profiler.start();}\
       cudaSetDevice(((Device_GPU*)values[0]->device)->cuda_device_id); \
-      update_rule_dev(*(Device_GPU*)values[0]->device,gscale,values); } \
+      update_rule_dev(*(Device_GPU*)values[0]->device,gscale,values); \
+    if (DAO::profile_enabled) {DAO::profiler.stop();}\
+      } \
     else { throw std::runtime_error("Bad device in MyTrainer::update_rule"); } \
   }
 #else

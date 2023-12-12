@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <unistd.h>
 #include <cuda_runtime.h>
-
+#include <DAO/profiler.h>
 #include <dynet/dynet.h>
 
 #define ANSI_COLOR_RED     "\x1b[31m"
@@ -27,7 +27,8 @@ typedef size_t logical_time_t;
 
 #define GPU_MEM_SIZE (128*1024*1024)
 #define CPU_MEM_SIZE (128*1024*1024)
-
+extern bool profile_enabled; 
+extern Profiler profiler;
 extern int verbose; 
 extern bool async_enabled; 
 extern bool offload_enabled;

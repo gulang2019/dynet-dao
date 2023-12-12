@@ -108,6 +108,17 @@ DynetParams extract_dynet_params(int& argc,
     }
 
 #ifdef USE_DAO 
+    // Dao Profile
+    else if (startswith(arg, "--dao-profile") ||
+             startswith(arg, "--dao_profile")) {
+      if (!has_arg(argi, argc, argv)) {
+        throw std::invalid_argument("[dao] --dao_profile");
+      } else {
+        string a2 = get_arg(argi, argv);
+        istringstream d(a2); d >> DAO::profile_enabled;
+        remove_args(argc, argv, argi, 2);
+      }
+    }
     // Weight decay
     else if (startswith(arg, "--dao-enable-async") ||
              startswith(arg, "--dao_enable_async")) {

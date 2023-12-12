@@ -8,6 +8,7 @@
 #include "getpid.h"
 #include "cl-args.h"
 #include "data-io.h"
+#include "DAO/DAO.h"
 
 using namespace std;
 using namespace dynet;
@@ -170,4 +171,5 @@ int main(int argc, char** argv) {
     ++epoch;
 
   }
+  DAO::profiler.dump("mnist");
 }

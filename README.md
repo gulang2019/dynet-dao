@@ -81,6 +81,11 @@ float res = as_scalar(loss) # valid
 - DAO::complete(const std::shared_ptr<T>& data): push the shared_ptr of data as a dummy kernel to the queue, so that it would be destructed after the kernel is pulled by the backend thread. 
 
 
+### Profile Traces
+Add `--dao-profile` to your bash when launching a dynet application to enable tracing of kernels;
+In your c++ application code, #include <DAO/DAO.h> and use DAO::profiler.dump(std::string name) method to dump the traces into a "name.traces" file. 
+
+
 <!-- <div align="center">
   <img alt="DyNet" src="doc/source/images/dynet_logo.png"><br><br>
 </div>
