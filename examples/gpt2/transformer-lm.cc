@@ -671,11 +671,11 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			Expression i_objective = i_xent;
 
 			// perform forward computation for aggregate objective
-			cg.forward(i_objective);
+			const auto &t = cg.forward(i_objective);
 
-            DAO::sync();
+			DAO::sync();
 			// grab the parts of the objective
-			float loss = as_scalar(cg.get_value(i_xent.i));
+			float loss = as_scalar(t);
 			if (!is_valid(loss)){
 				std::cerr << "***Warning***: nan or -nan values occurred!" << std::endl;
 				++id;
