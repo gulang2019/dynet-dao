@@ -90,20 +90,23 @@ def run_analysis(
     cmd = f"./build/dao-simulator {trace_file_name} {gpu_mem_limit} {mem_bandwidth} {allocation_strategy} {evict_strategy} {skip_rate} {output_file_name}"
     # print(cmd)
     process = subprocess.Popen(cmd, shell=True)
-    # process.wait()
-    
+    process.wait()
+
+from multiprocessing import Pool 
+
 import os 
 if __name__ == '__main__':
     args = parser.parse_args()
     os.makedirs('./output', exist_ok=True)
     processes = []
     arg_lists = []
-    for model_size in ['774M']:#['124M', '355M', '774M', '1558M']:
-        for skip_rate in [0,0.1,0.2,0.3,0.4]:
-            for gpu_mem_limit in [1, 2, 4, 8, 16]:
-                for mem_bandwidth in [178, 447, 715, 1200, 1789, 2500, 3000]:
-                    for allocation_strategy in ['BEST_FIT', 'FIRST_FIT']:
-                        for evict_strategy in ['FIRST_FIT', 'BELADY', 'WEIGHTED_BELADY', 'LRU', 'WEIGHTED_LRU']:
+    pool = Pool(processes=32)
+    for model_size in ['124M', '355M', '774M']:
+        for skip_rate in [0,0.1,0.2,0.3,0.4,0.5]:
+            for gpu_mem_limit in [1,2,4,8,12,16]:
+                for mem_bandwidth in [6.6, 13.1, 19.7, 26.2, 32.7, 39.3]:
+                    for allocation_strategy in ['BEST_FIT']:
+                        for evict_strategy in ['BELADY', 'WEIGHTED_BELADY', 'LRU', 'WEIGHTED_LRU']:
                             trace_file_name = f'/home/siyuanch/ssd/workspace_zelongg/dynet-dao/models/gpt2-{model_size}-{skip_rate}/train.trace'
                             if not os.path.exists(trace_file_name):
                                 print(f'{trace_file_name} not exists')
@@ -112,4 +115,7 @@ if __name__ == '__main__':
                             output_file_name = f'./output/gpt2-{model_size}-{skip_rate}/{gpu_mem_limit}-{mem_bandwidth}-{allocation_strategy}-{evict_strategy}.csv'
                             if os.path.exists(output_file_name):
                                 continue
-                            run_analysis(trace_file_name, gpu_mem_limit, mem_bandwidth, allocation_strategy, evict_strategy, 0.0, output_file_name)
+                            pool.apply_async(run_analysis, (trace_file_name, gpu_mem_limit, mem_bandwidth, allocation_strategy, evict_strategy, skip_rate, output_file_name))
+                            # run_analysis(trace_file_name, gpu_mem_limit, mem_bandwidth, allocation_strategy, evict_strategy, 0.0, output_file_name)
+    pool.close()
+    pool.join()

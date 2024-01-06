@@ -144,8 +144,8 @@ int main(int argc, char** argv) {
     std::string trace_name = std::string(argv[1]);
     Device device;
     device.mem_limit = std::stold(argv[2]) * (1 << 30); // kB 
-    device.mem_bandwidth = std::stof(argv[3]) * (1 << 10); // kB/s
-    std::cout << "device: " << device.mem_limit << " B, " << device.mem_bandwidth << " B/s" << std::endl;
+    device.mem_bandwidth = std::stof(argv[3]) * (1 << 20); // kB/s
+    std::cout << "device: " << device.mem_limit << " B, " << device.mem_bandwidth << " kB/s" << std::endl;
     DoubleLinkedListStorage::allocation_strategy_t allocation_strategy = allocation_strategy_map[argv[4]];
     DoubleLinkedListStorage::eviction_strategy_t evict_strategy = eviction_strategy_map[argv[5]];
     double skip_rate = std::stof(argv[6]);

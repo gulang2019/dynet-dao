@@ -92,9 +92,9 @@ public:
         DoubleLinkedListStorage::allocation_strategy_t allocation_strategy,
         DoubleLinkedListStorage::eviction_strategy_t evict_strategy
     ); 
-    real_time_t get_h2d_time() const {return H2D_stream.current();}
+    real_time_t get_h2d_time() const {return H2D_stream.get_copy_time();}
     real_time_t get_compute_time() const {return compute_stream.current();}
-    real_time_t get_d2h_time() const {return D2H_stream.current();}
+    real_time_t get_d2h_time() const {return D2H_stream.get_copy_time();}
     stream_t& get_compute_stream() {return compute_stream;}
     real_time_t get_total_time() const;
     double get_idle_rate() const {return compute_stream.idle_time / compute_stream.current();}
