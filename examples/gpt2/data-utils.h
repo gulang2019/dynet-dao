@@ -240,3 +240,44 @@ WordIdSentences read_corpus(const string &filename
 
 	return corpus;
 }
+
+// Specific parser for alpaca_gpt4_data.json, which is an array of dictionaries
+std::vector<std::map<std::string, std::string>> parseDictsJson(const std::string& json) {
+    std::vector<std::map<std::string, std::string>> result;
+
+    size_t pos = 0;
+    while ((pos = json.find('{', pos)) != std::string::npos) {
+        size_t endPos = json.find('\n', pos);
+		// We know each dict has three entries
+		endPos = json.find('\n', endPos + 1);
+		endPos = json.find('\n', endPos + 1);
+		endPos = json.find('\n', endPos + 1);
+		// find end of dict
+		endPos = json.find('}', endPos + 1);
+        assert((endPos != std::string::npos) && "Malformed JSON");
+
+        std::string dictionary = json.substr(pos + 1, endPos - pos - 1);
+        std::istringstream iss(dictionary);
+        std::string key, value;
+        std::map<std::string, std::string> dict;
+
+        while (std::getline(iss, key, ':') && std::getline(iss, value, '\n')) {
+            // Remove leading/trailing whitespaces and quotes
+            key.erase(0, key.find('\"') + 1);
+            key.erase(key.rfind('\"'));
+
+            value.erase(0, value.find('\"') + 1);
+            value.erase(value.rfind('\"'));
+
+			value = ::replace(value, "\\n", "\n");
+			value = ::replace(value, "\\\"", "\"");
+
+            dict[key] = value;
+        }
+
+        result.push_back(dict);
+        pos = endPos + 1;
+    }
+
+    return result;
+}

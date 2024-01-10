@@ -29,6 +29,7 @@
 #include <boost/range/irange.hpp>
 
 // All utilities
+#include "common.h"
 #include "utils.h"
 
 // Layers
@@ -390,7 +391,7 @@ typedef std::shared_ptr<LMDecoder> LMDecoderPointer;
 struct TransformerLModel {
 
 public:
-	explicit TransformerLModel(const TransformerConfig& tfc, dynet::Dict& d);
+	explicit TransformerLModel(const TransformerConfig& tfc, gpt_vocab& d);
 
 	explicit TransformerLModel();
 
@@ -425,7 +426,7 @@ public:
 
 	void set_dropout(bool is_activated = true);
 
-	dynet::Dict& get_dict();
+	gpt_vocab& get_dict();
 
 	TransformerConfig& get_config();
 
@@ -435,7 +436,7 @@ protected:
 
 	LMDecoderPointer _decoder;// lm decoder
 
-	dynet::Dict _dict;// vocabulary
+	gpt_vocab _dict;// vocabulary
 
 	dynet::Parameter _p_lnf_g, _p_lnf_b;// final layer normalisation
 
@@ -447,7 +448,7 @@ TransformerLModel::TransformerLModel(){
 	_decoder = nullptr;
 }
 
-TransformerLModel::TransformerLModel(const TransformerConfig& tfc, dynet::Dict& d)
+TransformerLModel::TransformerLModel(const TransformerConfig& tfc, gpt_vocab& d)
 : _tfc(tfc)
 {
 	_all_params.reset(new DyNetModel());// create new model parameter object
@@ -677,7 +678,8 @@ void TransformerLModel::sample(dynet::ComputationGraph& cg, WordIdSentence &targ
 	target.push_back(sos_sym); 
 
 	std::vector<std::string> pwords = split_words(prefix);
-	for (auto& word : pwords) target.push_back(_dict.convert(word));
+	assert(false && "Not implemented");
+	// for (auto& word : pwords) target.push_back(_dict.convert(word));
 
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	std::stringstream ss;
@@ -727,7 +729,7 @@ void TransformerLModel::set_dropout(bool is_activated){
 	_tfc._use_dropout = is_activated;
 }
 
-dynet::Dict& TransformerLModel::get_dict()
+gpt_vocab& TransformerLModel::get_dict()
 {
 	return _dict;
 }

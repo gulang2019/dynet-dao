@@ -5,6 +5,7 @@
 #include <DAO/DAO.h> 
 #include <DAO/interface-dynet.h>
 #include "transformer-lm.h"
+#include "common.h"
 
 using namespace std;
 using namespace dynet;
@@ -51,11 +52,15 @@ bool load_data(const variables_map& vm
 	, dynet::Dict& d
 	, SentinelMarkers& sm);
 // ---
+bool load_data_gpt2(const variables_map& vm
+	, WordIdSentences& train_cor, WordIdSentences& devel_cor, WordIdSentences& test_cor
+	, const gpt_vocab& d);
+// ---
 
 // ---
 bool load_model_config(const std::string& model_cfg_file
 	, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_models
-	, dynet::Dict& d
+	, gpt_vocab& d
 	, const transformer::SentinelMarkers& sm);
 // ---
 
@@ -220,29 +225,31 @@ int main(int argc, char** argv) {
 		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
 	// model recipe
-	dynet::Dict d;// vocabularies
+	gpt_vocab d;
 	SentinelMarkers sm;// sentinel markers
-	WordIdSentences train_cor, devel_cor;// integer-converted train and dev data
+	WordIdSentences train_cor, devel_cor, test_cor;// integer-converted train and dev data
 	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
 
 	std::string config_file = model_path + "/model.config";// configuration file path
+
+	// load fixed vocabularies from files
+	std::string vocab_file = vm["vocab"].as<std::string>();
+	assert(vocab_file.find("encoder.json") != string::npos);
+	gpt_vocab_init(vocab_file, d);
+
+	auto n_vocab = d.id_to_token.size();
+	// TODO UNK
+	sm._kTGT_SOS = n_vocab;
+	sm._kTGT_EOS = n_vocab + 1;
+
 	if (stat(config_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){// check existence	
 		// (incremental training)
 		// to load the training profiles from previous training run
 		cerr << "Found existing (trained) model from " << model_path << "!" << endl;	
 
-		// load vocabulary from files
-		std::string vocab_file = model_path + "/" + "vocab";
-		load_vocab(vocab_file, d);
-
-		// initalise sentinel markers
-		sm._kTGT_SOS = d.convert("<s>");
-		sm._kTGT_EOS = d.convert("</s>");
-		sm._kTGT_UNK = d.convert("<unk>");
-
 		// load data files and config file for training
 		if (is_training){
-			if (!load_data(vm, train_cor, devel_cor, d, sm))
+			if (!load_data_gpt2(vm, train_cor, devel_cor, test_cor, d))
 				TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 			// model configuration
@@ -267,15 +274,10 @@ int main(int argc, char** argv) {
 	else{// not exist, meaning that the model will be created from scratch!
 		cerr << "Preparing to train the model from scratch..." << endl;
 
-		// load fixed vocabularies from files if provided
-		load_vocab(vm["vocab"].as<std::string>(), d);
 
-		// sentinel markers
-		sm._kTGT_SOS = d.convert("<s>");
-		sm._kTGT_EOS = d.convert("</s>");
 
 		// load data files
-		if (!load_data(vm, train_cor, devel_cor, d, sm))
+		if (!load_data_gpt2(vm, train_cor, devel_cor, test_cor, d))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 		// transformer configuration
@@ -301,15 +303,11 @@ int main(int argc, char** argv) {
 			, false
 			, vm.count("use-hybrid-model"));
 
-		// save vocabularies to files
-		std::string vocab_file = model_path + "/" + "vocab";
-		save_vocab(vocab_file, d);
-
 		// save configuration file (for decoding/inference)
 		std::string config_out_file = model_path + "/model.config";
 		std::string params_out_file = model_path + "/model.params";
 		save_config(config_out_file, params_out_file, tfc);		
-	}		
+	}
 
 	if (is_training){
 		// learning rate scheduler
@@ -351,9 +349,6 @@ int main(int argc, char** argv) {
 		if (!load_model_config(config_file, v_tf_models, d, sm))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
 		
-		cerr << "Reading testing data from " << vm["test"].as<std::string>() << "..." << endl;
-		WordIdSentences test_cor = read_corpus(vm["test"].as<std::string>(), &d, false/*for development*/, 0, vm.count("r2l_target"));
-
 		report_perplexity_score(v_tf_models, test_cor, MINIBATCH_SIZE);
 	}
 
@@ -362,30 +357,58 @@ int main(int argc, char** argv) {
 //************************************************************************************************************************************************************
 
 // ---
-bool load_data(const variables_map& vm
-	, WordIdSentences& train_cor, WordIdSentences& devel_cor
-	, dynet::Dict& d
-	, SentinelMarkers& sm)
+// load InstructionTuningDataset
+bool load_data_gpt2(const variables_map& vm
+	, WordIdSentences& train_cor, WordIdSentences& devel_cor, WordIdSentences& test_cor
+	, const gpt_vocab& d)
 {
-	bool r2l_target = vm.count("r2l_target");
+	//! Actually contains whole dataset
+	std::string train_path = vm["train"].as<std::vector<std::string>>()[0];
+	assert(train_path.find("alpaca_gpt4_data.json") != string::npos);
+	cerr << endl << "Reading training data from " << train_path << "...\n";
 
-	std::vector<std::string> train_paths = vm["train"].as<std::vector<std::string>>();// to handle multiple training data
-	if (train_paths.size() > 2) TRANSFORMER_RUNTIME_ASSERT("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
-	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
-	if (vm.count("shared-embeddings"))
-		train_cor = read_corpus(train_paths[0], &d, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
-	else
-		train_cor = read_corpus(train_paths[0], &d, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
-	if ("" == vm["vocab"].as<std::string>()) // if not using external vocabularies
-		d.freeze(); // no new word types allowed
-	
-	if (train_paths.size() == 2)// incremental training
-	{
-		train_cor.clear();// use the next training corpus instead!	
-		cerr << "Reading extra training data from " << train_paths[1] << "...\n";
-		train_cor = read_corpus(train_paths[1], &d, true/*for training*/, vm["max-seq-len"].as<unsigned>(), r2l_target);
-		cerr << "Performing incremental training..." << endl;
+	// read file into string
+	std::ifstream ifs(train_path);
+	std::string json = std::string((std::istreambuf_iterator<char>(ifs)),
+     		(std::istreambuf_iterator<char>()));
+	// deser
+	auto raw_data = parseDictsJson(json);
+	auto ds_size = raw_data.size();
+	// encode as List[sentence]
+	vector<string> raw_sents;
+	for (const auto &data_point: raw_data) {
+		ostringstream oss;
+		// TODO SOS EOS
+		oss << "instruction " << data_point.at("instruction") << "\n\ninput " << data_point.at("input") << "\n\noutput " << data_point.at("output") << "\n\n";
+		raw_sents.push_back(oss.str());
 	}
+
+	int lc = 0, toks = 0;
+	unsigned int max_len = 0;
+	WordIdSentences corpus;
+	unsigned max_slen = vm["max-seq-len"].as<unsigned>();
+	for (const auto& raw_sent: raw_sents) {
+		WordIdSentence sent = gpt_tokenize(d, raw_sent);
+		if (max_slen > 0 && sent.size() > max_slen) continue;
+		// int sos_id = d.special_tokens[0], eos_id = d.special_tokens[1];
+		if (sent.size() < 1) continue;
+
+		corpus.push_back(sent);
+		max_len = std::max(max_len, (unsigned int)sent.size());
+		toks += sent.size();
+		++lc;
+	}
+	cerr << lc << " lines, " << toks << " tokens, " << "max length: " << max_len << ", " << d.size() << " types" << endl;
+
+	// train/test split
+    size_t train_size = ds_size * 4 / 5;
+    size_t val_size = ds_size / 10;
+    size_t test_size = ds_size - train_size - val_size;
+	auto train_end = corpus.begin() + train_size;
+	auto val_end = train_end + val_size;
+	train_cor = WordIdSentences(corpus.begin(), train_end);
+	devel_cor = WordIdSentences(train_end, val_end);
+	test_cor = WordIdSentences(val_end, corpus.end());
 
 	// limit the percent of training data to be used
 	unsigned train_percent = vm["train-percent"].as<unsigned>();
@@ -405,14 +428,7 @@ bool load_data(const variables_map& vm
 	if (DREPORT >= train_cor.size())
 		cerr << "WARNING: --dreport <num> (" << DREPORT << ")" << " is too large, <= training data size (" << train_cor.size() << ")" << endl;
 
-	// set up <unk> ids
-	d.set_unk("<unk>");
-	sm._kTGT_UNK = d.get_unk_id();
-
-	if (vm.count("devel")) {
-		cerr << "Reading dev data from " << vm["devel"].as<std::string>() << "...\n";
-		devel_cor = read_corpus(vm["devel"].as<std::string>(), &d, false/*for development*/, 0, r2l_target);
-	}
+	// TODO set up <unk> ids
 
 	return true;
 }
@@ -449,7 +465,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 bool load_model_config(const std::string& model_cfg_file
 	, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_models
-	, dynet::Dict& d
+	, gpt_vocab& d
 	, const transformer::SentinelMarkers& sm)
 {
 	cerr << "Loading model(s) from configuration file: " << model_cfg_file << "..." << endl;
@@ -591,7 +607,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	const transformer::TransformerConfig& tfc = tf.get_config();
 
 	// get current dict
-	dynet::Dict& dict = tf.get_dict();
+	auto& dict = tf.get_dict();
 
 	// create minibatches
 	std::vector<WordIdSentences> train_cor_minibatch, dev_cor_minibatch;
@@ -709,13 +725,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		tf.set_dropout(false);// disable dropout for evaluating dev data
 
 		// sample a random sentence (for observing translations during training progress)
-		if (SAMPLING_TRAINING){// Note: this will slow down the training process, suitable for debugging only.
-			dynet::ComputationGraph cg;
-			WordIdSentence target;
-			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;	
-			tf.sample(cg, target/*, prefix if possible*/);		
-			cerr << "***Random sample: " << get_sentence(target, dict) << endl;// can do sampling with any prefix
-		}
+		assert((SAMPLING_TRAINING == false) && "Not implemented");
 
 		timer_iteration.reset();
 
