@@ -247,6 +247,7 @@ std::vector<std::map<std::string, std::string>> parseDictsJson(const std::string
     std::vector<std::map<std::string, std::string>> result;
 	result.reserve(53000); // len(dataset) == 52002
 	// std::regex unicodePattern("\\\\u[0-9a-fA-F]{4}");
+	// std::regex escapePattern(R"(\\(.))");
 
     size_t pos = 0;
     while ((pos = json.find('{', pos)) != std::string::npos) {
@@ -271,6 +272,10 @@ std::vector<std::map<std::string, std::string>> parseDictsJson(const std::string
 
             value.erase(0, value.find('\"') + 1);
             value.erase(value.rfind('\"'));
+
+			// XXX slow + not all prompts are escaped
+			// value = std::regex_replace(value, unicodePattern, " ");
+			// value = std::regex_replace(value, escapePattern, "$1");
 
             dict[key] = value;
         }
