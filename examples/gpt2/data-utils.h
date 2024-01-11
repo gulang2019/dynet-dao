@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <regex>
 
 #include "dynet/dict.h"
 
@@ -244,6 +245,8 @@ WordIdSentences read_corpus(const string &filename
 // Specific parser for alpaca_gpt4_data.json, which is an array of dictionaries
 std::vector<std::map<std::string, std::string>> parseDictsJson(const std::string& json) {
     std::vector<std::map<std::string, std::string>> result;
+	result.reserve(53000); // len(dataset) == 52002
+	// std::regex unicodePattern("\\\\u[0-9a-fA-F]{4}");
 
     size_t pos = 0;
     while ((pos = json.find('{', pos)) != std::string::npos) {
@@ -269,13 +272,11 @@ std::vector<std::map<std::string, std::string>> parseDictsJson(const std::string
             value.erase(0, value.find('\"') + 1);
             value.erase(value.rfind('\"'));
 
-			value = ::replace(value, "\\n", "\n");
-			value = ::replace(value, "\\\"", "\"");
-
             dict[key] = value;
         }
 
         result.push_back(dict);
+		if (result.size() % 10000 == 0) std::cerr << "parsed " << result.size() << " records.\n";
         pos = endPos + 1;
     }
 

@@ -223,8 +223,10 @@ std::map<std::string, int32_t> json_parse(const std::string & fname) {
                     }
 
                     str_key = ::replace(str_key, "\\u0120", " " ); // \u0120 -> space
+                    str_key = ::replace(str_key, "\\u0109", "\t"); // \u0109 -> tab
                     str_key = ::replace(str_key, "\\u010a", "\n"); // \u010a -> new line
-                    str_key = ::replace(str_key, "\\\"",    "\""); // \\\"   -> "
+                    str_key = ::replace(str_key, R"(\\)", R"(\)");
+                    str_key = ::replace(str_key, "\\\"", "\""); // \" -> "
 
                     try {
                         result[str_key] = std::stoi(str_val);

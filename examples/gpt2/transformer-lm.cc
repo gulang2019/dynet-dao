@@ -28,6 +28,7 @@ using namespace transformer;
 using namespace boost::program_options;
 
 // hyper-paramaters for training
+unsigned PAD_TOKENS = 2; // <SOS> <EOS>
 unsigned MINIBATCH_SIZE = 1;
 
 bool DEBUGGING_FLAG = false;
@@ -259,8 +260,7 @@ int main(int argc, char** argv) {
 			std::string line;
 			getline(inpf_cfg, line);
 			std::stringstream ss(line);
-			// TODO: check if the 4 tokens have been accounted for
-			tfc._tgt_vocab_size = d.size();
+			tfc._tgt_vocab_size = d.size() + PAD_TOKENS;
 			tfc._sm = sm;
 			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
 			   >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
@@ -378,52 +378,50 @@ bool load_data_gpt2(const variables_map& vm
 	vector<string> raw_sents;
 	for (const auto &data_point: raw_data) {
 		ostringstream oss;
-		// TODO SOS EOS
 		oss << "instruction " << data_point.at("instruction") << "\n\ninput " << data_point.at("input") << "\n\noutput " << data_point.at("output") << "\n\n";
 		raw_sents.push_back(oss.str());
 	}
-
-	int lc = 0, toks = 0;
-	unsigned int max_len = 0;
-	WordIdSentences corpus;
-	unsigned max_slen = vm["max-seq-len"].as<unsigned>();
-	for (const auto& raw_sent: raw_sents) {
-		WordIdSentence sent = gpt_tokenize(d, raw_sent);
-		if (max_slen > 0 && sent.size() > max_slen) continue;
-		// int sos_id = d.special_tokens[0], eos_id = d.special_tokens[1];
-		if (sent.size() < 1) continue;
-
-		corpus.push_back(sent);
-		max_len = std::max(max_len, (unsigned int)sent.size());
-		toks += sent.size();
-		++lc;
-	}
-	cerr << lc << " lines, " << toks << " tokens, " << "max length: " << max_len << ", " << d.size() << " types" << endl;
 
 	// train/test split
     size_t train_size = ds_size * 4 / 5;
     size_t val_size = ds_size / 10;
     size_t test_size = ds_size - train_size - val_size;
-	auto train_end = corpus.begin() + train_size;
-	auto val_end = train_end + val_size;
-	train_cor = WordIdSentences(corpus.begin(), train_end);
-	devel_cor = WordIdSentences(train_end, val_end);
-	test_cor = WordIdSentences(val_end, corpus.end());
+	auto val_begin = train_size;
+	auto val_end = val_begin + val_size;
 
 	// limit the percent of training data to be used
 	unsigned train_percent = vm["train-percent"].as<unsigned>();
-	if (train_percent < 100 
-		&& train_percent > 0)
-	{
-		cerr << "Only use " << train_percent << "% of " << train_cor.size() << " training instances: ";
-		unsigned int rev_pos = train_percent * train_cor.size() / 100;
-		train_cor.erase(train_cor.begin() + rev_pos, train_cor.end());
-		cerr << train_cor.size() << " instances remaining!" << endl;
-	}
-	else if (train_percent != 100){
+	if (train_percent < 100 && train_percent > 0) {
+		cerr << "Only use " << train_percent << "% of " << train_size << " training instances: ";
+		train_size = train_size * train_percent / 100;
+		cerr << train_size << " instances remaining!" << endl;
+	} else if (train_percent != 100){
 		cerr << "Invalid --train-percent <num> used. <num> must be (0,100]" << endl;
 		return false;
 	}
+
+	// Tokenize. Deferred here because it's slow
+	int lc = 0, toks = 0;
+	unsigned int max_len = 0;
+	unsigned max_slen = vm["max-seq-len"].as<unsigned>();
+
+	for (int i=0, e=raw_sents.size(); i<e; ++i) {
+		if (i>=train_size && i<val_begin) continue;
+		const auto& raw_sent = raw_sents[i];
+		WordIdSentence sent = gpt_tokenize(d, raw_sent);
+		if (max_slen > 0 && sent.size() > max_slen) continue;
+		// int sos_id = d.special_tokens[0], eos_id = d.special_tokens[1];
+		if (sent.size() < 1) continue;
+
+		if (i<train_size) train_cor.push_back(sent);
+		else if (i<val_end) devel_cor.push_back(sent);
+		else test_cor.push_back(sent);
+
+		max_len = std::max(max_len, (unsigned int)sent.size());
+		toks += sent.size();
+		++lc;
+	}
+	cerr << lc << " lines, " << toks << " tokens, " << "max length: " << max_len << ", " << d.size() << " types" << endl;
 
 	if (DREPORT >= train_cor.size())
 		cerr << "WARNING: --dreport <num> (" << DREPORT << ")" << " is too large, <= training data size (" << train_cor.size() << ")" << endl;
@@ -491,7 +489,7 @@ bool load_model_config(const std::string& model_cfg_file
 		transformer::TransformerConfig tfc;
 		std::string model_file;
 
-		tfc._tgt_vocab_size = d.size();
+		tfc._tgt_vocab_size = d.size() + PAD_TOKENS;
 		tfc._sm = sm;
 		
 		ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
@@ -720,7 +718,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			   		 
 			++id;
 		}
-		goto finish;
+		// goto finish; // TODO remove before production
 		// show score on dev data?
 		tf.set_dropout(false);// disable dropout for evaluating dev data
 
