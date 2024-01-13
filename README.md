@@ -52,9 +52,7 @@ Transformer Example
 gpt2 Example
 ```
 # cd <repo dir>
-mkdir -p models/gpt2-124M
-build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --reset-if-stuck --use-smaller-minibatch &> models/gpt2-124M/train.log
-build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --reset-if-stuck --use-smaller-minibatch --dao-profile 1
+build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --model-path models/gpt2-124M/ --reset-if-stuck --use-smaller-minibatch --dao-profile 1 --train-percent 100 2>&1 | tee models/gpt2-124M/train.log
 ```
 
 Run xor test 
