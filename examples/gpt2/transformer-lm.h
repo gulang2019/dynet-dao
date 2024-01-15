@@ -42,15 +42,19 @@ namespace transformer {
 
 //--- LM Decoder Layer
 struct LMDecoderLayer{
-	explicit LMDecoderLayer(DyNetModel* mod, TransformerConfig& tfc)
-		:_self_attention_sublayer(mod, tfc, true)
-		, _feed_forward_sublayer(mod, tfc)
-	{	
+	explicit LMDecoderLayer(DyNetModel& mod, TransformerConfig& tfc)
+		: _mod_attn(mod.add_subcollection("attn"))
+		, _self_attention_sublayer(_mod_attn, tfc, true)
+		, _mod_mlp(mod.add_subcollection("mlp"))
+		, _feed_forward_sublayer(_mod_mlp, tfc)
+	{
+		auto mod_ln1 = mod.add_subcollection("ln-1");
+		auto mod_ln2 = mod.add_subcollection("ln-2");
 		// initialisation for layer normalisation
-		_p_ln1_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
-		_p_ln1_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
-		_p_ln2_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
-		_p_ln2_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
+		_p_ln1_b = mod_ln1.add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f), "b");
+		_p_ln1_g = mod_ln1.add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f), "g");
+		_p_ln2_b = mod_ln2.add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f), "b");
+		_p_ln2_g = mod_ln2.add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f), "g");
 
 		_p_tfc = &tfc;
 	}
@@ -58,9 +62,11 @@ struct LMDecoderLayer{
 	~LMDecoderLayer(){}	
 
 	// multi-head attention sub-layers
+	DyNetModel _mod_attn;
 	MultiHeadAttentionLayer _self_attention_sublayer;// self-attention
 
 	// position-wise feed forward sub-layer
+	DyNetModel _mod_mlp;
 	FeedForwardLayer _feed_forward_sublayer;
 
 	// for layer normalisation
@@ -125,14 +131,16 @@ struct LMDecoderLayer{
 struct LMDecoder{
 	explicit LMDecoder(DyNetModel* mod, TransformerConfig& tfc)
 	{
-		_p_embed_t = mod->add_lookup_parameters(tfc._tgt_vocab_size, {tfc._num_units});
-
 		if (!tfc._use_hybrid_model && tfc._position_encoding == 1){
-			_p_embed_pos = mod->add_lookup_parameters(tfc._max_length, {tfc._num_units});
+			_p_embed_pos = mod->add_lookup_parameters(tfc._max_length, {tfc._num_units}, "wpe");
 		}
 
+		_p_embed_t = mod->add_lookup_parameters(tfc._tgt_vocab_size, {tfc._num_units}, "wte");
+
 		for (unsigned l = 0; l < tfc._nlayers; l++){
-			_v_dec_layers.push_back(LMDecoderLayer(mod, tfc));
+			auto mod_layer = mod->add_subcollection("blocks." + to_string(l));
+			_v_dec_layers.push_back(LMDecoderLayer(mod_layer, tfc));
+			_mod_layers.push_back(mod_layer);
 		}
 
 		if (tfc._use_hybrid_model){
@@ -152,6 +160,7 @@ struct LMDecoder{
 	// hybrid architecture: use LSTM-based RNN over word embeddings instead of word embeddings + positional encodings
 	std::shared_ptr<dynet::LSTMBuilder> _p_tgt_rnn;
 
+	std::vector<DyNetModel> _mod_layers;
 	std::vector<LMDecoderLayer> _v_dec_layers;// stack of identical decoder layers
 
 	// transformer config pointer
@@ -455,9 +464,10 @@ TransformerLModel::TransformerLModel(const TransformerConfig& tfc, gpt_vocab& d)
 
 	_decoder.reset(new LMDecoder(_all_params.get(), _tfc));// create new decoder object
 
+	auto mod_lnf = _all_params.get()->add_subcollection("ln-f");
 	// final LayerNorm
-	_p_lnf_g = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(1.f));
-	_p_lnf_b = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(0.f));
+	_p_lnf_b = mod_lnf.add_parameters({_tfc._num_units}, dynet::ParameterInitConst(0.f), "b");
+	_p_lnf_g = mod_lnf.add_parameters({_tfc._num_units}, dynet::ParameterInitConst(1.f), "g");
 
 	// dictionaries
 	_dict = d;

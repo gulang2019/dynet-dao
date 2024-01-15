@@ -30,12 +30,12 @@ dynet::Expression make_sinusoidal_position_encoding(dynet::ComputationGraph &cg,
 
 //--- Simple Linear Layer (w/ or w/o bias)
 struct LinearLayer{
-	explicit LinearLayer(DyNetModel* mod, unsigned input_dim, unsigned output_dim, bool have_bias=true, bool initLC=false)
+	explicit LinearLayer(DyNetModel& mod, unsigned input_dim, unsigned output_dim, bool have_bias=true, bool initLC=false)
 		: _have_bias(have_bias)
 	{		
-		_p_W = (initLC == false)?mod->add_parameters({output_dim, input_dim}):mod->add_parameters({output_dim, input_dim}, ParameterInitLeCunUniform(input_dim));
 		if (_have_bias)
-			_p_b = (initLC == false)?mod->add_parameters({output_dim}):mod->add_parameters({output_dim}, ParameterInitLeCunUniform(output_dim));
+			_p_b = (initLC == false)?mod.add_parameters({output_dim}):mod.add_parameters({output_dim}, ParameterInitLeCunUniform(output_dim), "b");
+		_p_W = (initLC == false)?mod.add_parameters({output_dim, input_dim}):mod.add_parameters({output_dim, input_dim}, ParameterInitLeCunUniform(input_dim), "w");
 	}
 
 	dynet::Expression apply(dynet::ComputationGraph& cg, const dynet::Expression& i_x, bool reconstruct_shape=true, bool time_distributed=false){
@@ -71,7 +71,7 @@ struct LinearLayer{
     where g is nonlinearity over x (e.g., a block of feedforward networks), t is transform gate, and (1 - t) is carry gate.
 */
 struct HighwayNetworkLayer{
-	explicit HighwayNetworkLayer(DyNetModel* mod, unsigned input_dim, bool have_bias=true)
+	explicit HighwayNetworkLayer(DyNetModel& mod, unsigned input_dim, bool have_bias=true)
 #ifdef USE_LECUN_DIST_PARAM_INIT
 		: _l_layer(mod, input_dim, input_dim, have_bias, true)
 #else
@@ -95,14 +95,16 @@ struct HighwayNetworkLayer{
 };
 
 struct FeedForwardLayer{
-	explicit FeedForwardLayer(DyNetModel* mod, TransformerConfig& tfc)
-		: _l_inner(mod, tfc._num_units, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/)
-		, _l_outer(mod, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, tfc._num_units)
-	{		
+	explicit FeedForwardLayer(DyNetModel& mod, TransformerConfig& tfc)
+		: _mod_inner(mod.add_subcollection("c-fc"))
+		, _l_inner(_mod_inner, tfc._num_units, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, true, true)
+		, _mod_outer(mod.add_subcollection("c-proj"))
+		, _l_outer(_mod_outer, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, tfc._num_units, true, true)
+	{
 		_p_tfc = &tfc;
 
 		if (_p_tfc->_ffl_activation_type == FFL_ACTIVATION_TYPE::SWISH_LEARNABLE_BETA)
-			_p_beta = mod->add_parameters({1});
+			_p_beta = mod.add_parameters({1});
 	}	
 
 	~FeedForwardLayer(){}	
@@ -133,6 +135,8 @@ struct FeedForwardLayer{
 		return i_outer;
 	}
 
+	DyNetModel _mod_inner;
+	DyNetModel _mod_outer;
 	LinearLayer _l_inner;
 	LinearLayer _l_outer;
 };
@@ -202,12 +206,16 @@ struct MaskBase{
 //--- Multi-Head Attention Layer
 struct MultiHeadAttentionLayer{
 #ifdef MULTI_HEAD_ATTENTION_PARALLEL
-	explicit MultiHeadAttentionLayer(DyNetModel* mod, TransformerConfig& tfc, bool is_future_blinding=false)
+	explicit MultiHeadAttentionLayer(DyNetModel& mod, TransformerConfig& tfc, bool is_future_blinding=false)
 #ifdef USE_LECUN_DIST_PARAM_INIT
-		: _l_W_Q(mod, tfc._num_units, tfc._num_units, true/*gpt2 use bias*/, true)
-		, _l_W_K(mod, tfc._num_units, tfc._num_units, true, true)
-		, _l_W_V(mod, tfc._num_units, tfc._num_units, true, true)
-		, _l_W_O(mod, tfc._num_units, tfc._num_units, true, true)
+		: _mod_q(mod.add_subcollection("wq"))
+		, _mod_k(mod.add_subcollection("wk"))
+		, _mod_v(mod.add_subcollection("wv"))
+		, _mod_o(mod.add_subcollection("c-proj"))
+		, _l_W_Q(_mod_q, tfc._num_units, tfc._num_units, true/*gpt2 use bias*/, true)
+		, _l_W_K(_mod_k, tfc._num_units, tfc._num_units, true, true)
+		, _l_W_V(_mod_v, tfc._num_units, tfc._num_units, true, true)
+		, _l_W_O(_mod_o, tfc._num_units, tfc._num_units, true, true)
 #else
 		: _l_W_Q(mod, tfc._num_units, tfc._num_units, false/*linear layer w/o bias*/)
 		, _l_W_K(mod, tfc._num_units, tfc._num_units, false)
@@ -224,6 +232,10 @@ struct MultiHeadAttentionLayer{
 
 	~MultiHeadAttentionLayer(){}
 
+	DyNetModel _mod_q;
+	DyNetModel _mod_k;
+	DyNetModel _mod_v;
+	DyNetModel _mod_o;
 	// linear projection matrices
 	LinearLayer _l_W_Q;
 	LinearLayer _l_W_K;
