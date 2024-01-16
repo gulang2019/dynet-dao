@@ -88,13 +88,13 @@ void simulate(
 
     auto & compute_stream = allocator.get_compute_stream();
     for (auto& kernel: trace.kernels) {
-        cout<< "processing kernel" << endl;
-        print_kernel(kernel);
+        //cout<< "processing kernel" << endl;
+        //print_kernel(kernel);
         allocator.prepare(kernel);
-        cout << "finish prepare" << endl;
+        //cout << "finish prepare" << endl;
         //compute_stream.commit(kernel.time);
         allocator.complete(kernel);
-        cout << "finish complete" << endl;
+        //cout << "finish complete" << endl;
     }
     auto stop = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop-start);
@@ -161,6 +161,7 @@ int main(int argc, char** argv) {
     Device device;
     device.mem_limit = std::stold(argv[2]) * (1 << 30); // kB 
     device.mem_bandwidth = std::stof(argv[3]) * (1 << 20); // kB/s
+    
     std::cout << "device: " << device.mem_limit << " B, " << device.mem_bandwidth << " kB/s" << std::endl;
     DoubleLinkedListStorage::allocation_strategy_t allocation_strategy = allocation_strategy_map[argv[4]];
     DoubleLinkedListStorage::eviction_strategy_t evict_strategy = eviction_strategy_map[argv[5]];
@@ -174,4 +175,6 @@ int main(int argc, char** argv) {
     simulate(trace_name, trace, device, allocation_strategy, evict_strategy, skip_rate, output_filename);
     return 0;
 }
+
+
 

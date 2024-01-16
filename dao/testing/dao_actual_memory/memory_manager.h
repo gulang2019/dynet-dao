@@ -92,6 +92,7 @@ public:
     virtual std::shared_ptr<MemBlock> mergeAndAllocate(size_t size, const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back) = 0;
     virtual void display(std::ostream& o) const = 0; 
     virtual ~MemStorage() = default;
+    virtual bool check_MemStorage() = 0;
 };
 
 class DoubleLinkedListStorage : public MemStorage {
@@ -145,6 +146,7 @@ public:
     std::shared_ptr<MemBlock> merge(const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back) override;
     std::shared_ptr<MemBlock> mergeAndAllocate(size_t size, const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back) override;
     void display(std::ostream& o) const override;
+    bool check_MemStorage() override;
 
 private: 
     inline void display(std::ostream& o, const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back, bool exclusive = false) const;
@@ -153,7 +155,7 @@ private:
     eviction_strategy_t eviction_strategy;
     size_t alignment;
     size_t split_threshold;  
-    size_t allocated;
+    unsigned long allocated;
     size_t grow_size; 
     size_t mem_limit;
     std::shared_ptr<MemBlock> start;

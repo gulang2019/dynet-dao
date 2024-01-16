@@ -8,8 +8,6 @@
 
 #define ROUND_UP(x, s) ((x + s - 1) / s * s)
 
-
-
 void VirtualMallocr::raw_free(void* ptr) {
     // do nothing
 }
@@ -33,6 +31,7 @@ void CPURealMallocr::raw_free(void* ptr) {
 void* CPURealMallocr::raw_malloc(size_t size) {
     void* ptr = nullptr;
     cudaMallocHost(&ptr, size);
+    allocated += size;
     return ptr;
 }
 
@@ -47,6 +46,7 @@ void GPURealMallocr::raw_free(void* ptr) {
 void* GPURealMallocr::raw_malloc(size_t size) {
     void* ptr = nullptr;
     cudaMalloc(&ptr, size);
+    allocated += size;
     return ptr;
 }
 
@@ -67,6 +67,8 @@ MemStorage::MemStorage(device_type_t device_type, const std::string& name):
 }
 
 
+
+
 DoubleLinkedListStorage::DoubleLinkedListStorage(
     MemStorage::device_type_t device_type,
     size_t device_mem_size,
@@ -81,7 +83,12 @@ DoubleLinkedListStorage::DoubleLinkedListStorage(
     split_threshold(_split_threshold), allocation_strategy(_allocation_strategy),
     eviction_strategy(_eviction_strategy),mem_limit(_mem_limit), logical_time(logical_time){
     
-    device_mem_size = ROUND_UP(device_mem_size, alignment);
+    cout << "device memory size, " << device_mem_size << "; alignment " << alignment << endl;
+    size_t initial_mem_size = ROUND_UP(device_mem_size, alignment);
+    cout << "initial memory size " << initial_mem_size << endl;
+
+
+    device_mem_size = ROUND_UP(device_mem_size + alignment, alignment);
     grow_size = ROUND_UP(_grow_size, alignment);
     if (mem_limit == (size_t)-1) 
         mem_limit = device_mallocr->mem_limit(); 
@@ -95,13 +102,25 @@ DoubleLinkedListStorage::DoubleLinkedListStorage(
     first_block->next = end;
     end->prev = first_block;
     void* ptr = device_mallocr->raw_malloc(device_mem_size);
+
+    if (ptr == nullptr) {
+        cout << "memory allocation failed, null pointer"<< endl;   
+    }
     allocated_list.push_back(ptr);
-    first_block->physical_location_start = (void*)ROUND_UP((size_t)ptr, alignment);
+    first_block->physical_location_start = (void*)ROUND_UP((unsigned long)ptr, alignment);
     allocated += device_mem_size;
 
     // CUDA_CHECK(cudaMalloc(&first_block->physical_location_start, device_mem_size));
-    first_block->physical_location_end = (void*)((char*)ptr + device_mem_size);
-    first_block->payload_size = device_mem_size; 
+    first_block->physical_location_end = (void*)((unsigned long)(first_block -> physical_location_start) + initial_mem_size);
+    
+    if ((unsigned long)(first_block -> physical_location_start) >= (unsigned long)(first_block -> physical_location_end)) {
+        cout << "initial memory size " << initial_mem_size << endl;
+        cout << "first block start address " << (unsigned long)(first_block -> physical_location_start) << ", end address " << (unsigned long)(first_block -> physical_location_end) << endl;
+    }
+
+    assert((unsigned long)(first_block -> physical_location_start) < (unsigned long)(first_block -> physical_location_end));
+
+    first_block->payload_size = initial_mem_size; 
     
     start->physical_location_start = start->physical_location_end = first_block->physical_location_start;
     end->physical_location_start = end->physical_location_end = first_block->physical_location_end;
@@ -109,12 +128,14 @@ DoubleLinkedListStorage::DoubleLinkedListStorage(
     std::string device_tag = (device_type == CPU) ? "CPU" : "GPU";
     MemStorage::name += "::" + device_tag;
     DAO_INFO("DoubleLinkedListStorage created on %s, device_mem_size = %lu, grow_size = %lu, mem_limit = %lu", device_tag.c_str(), device_mem_size, grow_size, mem_limit);
+    DAO_ASSERT(this -> check_MemStorage(), "invalid initialization;");
 }
 
 
 
 
 std::shared_ptr<MemBlock> DoubleLinkedListStorage::allocate(size_t size) {
+    DAO_ASSERT(this -> check_MemStorage(), "before allocation");
     size = ROUND_UP(size, alignment);
     // first check if there has available space
     std::shared_ptr<MemBlock> best_iter = nullptr;
@@ -135,16 +156,16 @@ std::shared_ptr<MemBlock> DoubleLinkedListStorage::allocate(size_t size) {
         iter = iter->next; 
     }
     auto to_grow = std::max(size, grow_size);
-    if (best_iter == nullptr && ((allocated + to_grow) <= mem_limit)) {    
-        void* ptr = device_mallocr->raw_malloc(to_grow);
+    if (best_iter == nullptr && ((allocated + to_grow + alignment) <= mem_limit)) {    
+        void* ptr = device_mallocr->raw_malloc(to_grow + alignment);
         if (ptr != nullptr) {
             allocated_list.push_back(ptr);
             // no available space, need to grow
             best_iter = std::make_shared<MemBlock>();
-            best_iter->physical_location_start = (void*)ROUND_UP((size_t)ptr, alignment);
-            allocated += to_grow;
+            best_iter->physical_location_start = (void*)ROUND_UP((unsigned long)ptr, alignment);
+            allocated +=  to_grow + alignment;
             // CUDA_CHECK(cudaMalloc(&best_iter->physical_location_start, to_grow));
-            best_iter->physical_location_end = (void*)((char*)ptr + to_grow);
+            best_iter->physical_location_end = (void*)((char*)(best_iter -> physical_location_start) + to_grow);
             best_iter->payload_size = to_grow;
 
             assert(best_iter->physical_location_end <= start->physical_location_start || 
@@ -171,12 +192,14 @@ std::shared_ptr<MemBlock> DoubleLinkedListStorage::allocate(size_t size) {
     // allocate and split 
     assert(best_iter->allocated == false && best_iter->payload_size >= size);
     bool split = splitAndAllocate(size, best_iter);
+    //assert(this -> check_MemStorage());
     return best_iter; 
 }
 
 
 
 bool DoubleLinkedListStorage::splitAndAllocate(size_t size, std::shared_ptr<MemBlock>& block) {
+    DAO_ASSERT(size % alignment == 0, "split size not aligned");
     bool split = split_cond(block->payload_size, size);
     if (split) {
         std::shared_ptr<MemBlock> new_block = std::make_shared<MemBlock>();
@@ -205,7 +228,6 @@ bool DoubleLinkedListStorage::split_cond(size_t block_size, size_t required_size
 
 std::pair<std::shared_ptr<MemBlock>,std::shared_ptr<MemBlock> > 
 DoubleLinkedListStorage::evict(size_t size, std::vector<std::shared_ptr<MemBlock>>& blocks) {
-    assert(size);
     size = ROUND_UP(size, alignment);
     double best_score = 0;
     std::shared_ptr<MemBlock> front, back, best_front, best_back;
@@ -448,8 +470,12 @@ std::shared_ptr<MemBlock> DoubleLinkedListStorage::mergeAndAllocate(
     size_t size, 
     const std::shared_ptr<MemBlock>& front, 
     const std::shared_ptr<MemBlock>& back) {
+    size = ROUND_UP(size, alignment);
     std::shared_ptr<MemBlock> new_block = merge(front, back);
     splitAndAllocate(size, new_block);
+    DAO_ASSERT((size) % (this -> alignment) == 0, "block split size not aligned");
+    DAO_ASSERT((unsigned long)(new_block -> physical_location_start) % (this -> alignment) == 0, "new block start location not properly aligned");
+    DAO_ASSERT((unsigned long)(new_block -> physical_location_end) % (this -> alignment) == 0, "new block end location not properly aligned");
     return new_block;
 }
 
@@ -545,3 +571,65 @@ void MemBlock::display(std::ostream& o) const {
     o << "M:" << ((size_t)this & 0xfff) << "]";
 }
 
+
+
+bool DoubleLinkedListStorage::check_MemStorage() {
+    //check if the double linked list is valid
+    //cout << "storage check" << endl;
+    if (this -> start -> physical_location_start != this -> start -> physical_location_end) {
+        cout << "header block invalid" << endl;
+        return false;
+    }
+    if (this -> end -> physical_location_start != this -> end -> physical_location_end) {
+        cout << "tail block invalid" << endl;
+        return false;
+    }
+    std::shared_ptr<MemBlock> tracer = this -> start -> next;
+    if (tracer -> prev != this -> start) {
+        cout << "starting block not well connected with the first block" << endl;
+        return false;
+    }
+    size_t discontinous_counter = 0;
+    while (tracer != this -> end) {
+        size_t block_size = ((size_t) tracer -> physical_location_end) - ((size_t) tracer -> physical_location_start);
+        size_t payload_size = tracer -> payload_size;
+        if (block_size % (this -> alignment) != 0) {
+            cout << "start of the block " << tracer -> physical_location_start << endl;
+            cout << "end of the block " << tracer -> physical_location_end << endl;
+            cout << "block size not aligned properly: " << block_size << endl;
+            return false;
+        } 
+        if (payload_size > block_size) {
+            cout << "payload size larger than block size" << endl;
+            return false;
+        }
+        if (tracer -> next != NULL) {
+            if (tracer -> next -> prev != tracer) {
+                cout << "next block" << tracer -> next << endl;
+                cout << "current block" << tracer << endl;
+                cout << "double linked list broken" << endl;
+                return false;
+            }
+            /*
+            if (!(tracer -> allocated) && !(tracer -> next-> allocated))  {
+                if ((unsigned long) (tracer -> physical_location_end) ==  (unsigned long) (tracer -> next -> physical_location_start)) {
+                    cout << "consequtive free blocks without merging" << endl;
+                    //this -> display(std::cout, this -> start, this -> end, false);
+                    return false;
+                }
+            }
+            */
+            if ((unsigned long) (tracer -> physical_location_end) !=  (unsigned long) (tracer -> next -> physical_location_start)) {
+                discontinous_counter += 1;
+            }
+        }
+        tracer = tracer -> next;
+    }
+    if (discontinous_counter != allocated_list.size() - 1) {
+        cout << "broken block list: more discontinous block address than allocated list" << endl;
+        return false;
+    }
+    //cout << "start checking each list" << endl;
+    return true;
+    //check if block size if valid
+}

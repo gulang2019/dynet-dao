@@ -53,11 +53,14 @@ Allocator::Allocator(
     DoubleLinkedListStorage::allocation_strategy_t allocation_strategy,
     DoubleLinkedListStorage::eviction_strategy_t evict_strategy
 ) {
+    //cout << "GPU memory initial size" << device.mem_limit << endl;
+    cout << "size of size_t: " << sizeof(size_t) << endl;
     cpu_manager = std::make_unique<DoubleLinkedListStorage>(
-        MemStorage::CPU, size_t(-1), logical_time, (size_t)(-1), 0,
+        MemStorage::CPU, ((size_t) 1) << 31, logical_time, ((size_t)1) << 31, 0,
         DoubleLinkedListStorage::allocation_strategy_t::FIRST_FIT,
         DoubleLinkedListStorage::eviction_strategy_t::EVI_FIRST_FIT,
         1024, 256);
+    cout << "GPU memory initial size" << device.mem_limit << endl;
     gpu_manager = std::make_unique<DoubleLinkedListStorage>(
         MemStorage::GPU, device.mem_limit, logical_time, device.mem_limit, 0, 
         allocation_strategy,
@@ -73,6 +76,7 @@ Allocator::Allocator(
     CUDA_CHECK(cudaStreamCreate(&D2H_stream));
     this->H2D_stream = H2D_stream;
     this->D2H_stream = D2H_stream; 
+    //assert(false);
     //H2D_stream.bandwidth = device.mem_bandwidth;
     //D2H_stream.bandwidth = device.mem_bandwidth;
 }
@@ -101,7 +105,10 @@ GlobalMemRecord::GlobalMemRecord(Trace& trace): tensor_sizes(trace.tensor_sizes)
 void* Allocator::prepare(TensorUID uid){
     TensorRecord& record = global_memory_record -> lookup_tensor(uid);
     //this->wait_for_event_if_have(record);
+    DAO_ASSERT(gpu_manager->check_MemStorage(),  "gpu linked list invalid before prepare");
+    DAO_ASSERT(cpu_manager->check_MemStorage(),  "cpu linked list invalid before prepare");
     if (record.status == ONCPU){
+        DAO_INFO("moving record from CPU to GPU");
         std::shared_ptr<MemBlock> block = this->allocate_on_gpu(record.tensor_size);
         if (block != nullptr) {
             assert(!block->allocated && block->record == nullptr);
@@ -126,6 +133,7 @@ void* Allocator::prepare(TensorUID uid){
         }
     }
     else if (record.status == UNINITIALIZED) {
+        DAO_INFO("record status need to be initialized");
         std::shared_ptr<MemBlock> block = this -> allocate_on_gpu(record.tensor_size);
         assert(record.block_ptr == nullptr);
         if (block == nullptr) {
@@ -137,12 +145,16 @@ void* Allocator::prepare(TensorUID uid){
         block->record = &record;
         block->allocated = true;
     }
+    DAO_ASSERT(gpu_manager->check_MemStorage(),  "gpu linked list invalid after prepare");
+    DAO_ASSERT(cpu_manager->check_MemStorage(),  "cpu linked list invalid after prepare");
     return record.block_ptr -> physical_location_start; 
 }
 
 
 
 std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
+    //assert(gpu_manager->check_MemStorage());
+    //assert(cpu_manager->check_MemStorage());
     std::shared_ptr<MemBlock> block = gpu_manager->allocate(size);
     if (block != nullptr) {
         return std::move(block);
@@ -163,7 +175,7 @@ std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
         if (CPU_block == nullptr) {
             DAO_ERROR("No memory left on CPU");
         } else {
-            cout << "eviction " << endl;
+            //cout << "eviction " << endl;
             //D2H_stream.wait_for(evict_record->event);
             //D2H_stream.copy(evict_record->tensor_size);
             //evict_record->event = D2H_stream.current();
@@ -190,6 +202,8 @@ std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
 
 
 void Allocator::prepare(const Kernel& kernel) {
+    DAO_ASSERT(gpu_manager->check_MemStorage(), "gpu linked list invalid before prepare");
+    DAO_ASSERT(cpu_manager->check_MemStorage(), "cpu linked list invalid before prepare");
     std::unordered_set<TensorUID> tensor_ids(kernel.accesses.begin(), kernel.accesses.end());
     for (auto& tensor_id : tensor_ids) {
         TensorRecord& record = global_memory_record -> lookup_tensor(tensor_id);
@@ -203,11 +217,15 @@ void Allocator::prepare(const Kernel& kernel) {
     for (auto& tensor_id : tensor_ids) {
         prepare(tensor_id);
     }
+    DAO_ASSERT(gpu_manager->check_MemStorage(), "gpu linked list invalid after prepare");
+    DAO_ASSERT(cpu_manager->check_MemStorage(), "cpu linked list invalid after prepare");
 }
 
 
 
 void Allocator::complete(const Kernel& kernel) {
+    assert(gpu_manager->check_MemStorage());
+    assert(cpu_manager->check_MemStorage());
     std::unordered_set<TensorUID> tensor_ids(kernel.accesses.begin(), kernel.accesses.end());
     //tensor_ids.insert(kernel._outputs.begin(), kernel._output.end());
     
@@ -226,6 +244,8 @@ void Allocator::complete(const Kernel& kernel) {
         free(tensor_id);
     }
     logical_time++;
+    assert(gpu_manager->check_MemStorage());
+    assert(cpu_manager->check_MemStorage());
 }
 
 void Allocator::display(std::ostream& o) const {
