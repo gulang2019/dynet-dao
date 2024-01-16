@@ -118,6 +118,7 @@ public:
     cudaStream_t& get_compute_stream() {return compute_stream;}
     //real_time_t get_total_time() const;
     //double get_idle_rate() const {return compute_stream.idle_time / compute_stream.current();}
+    TensorRecord& lookup_tensor(TensorUID tensor_id);
     void prepare(const Kernel& kernel);
     void complete(const Kernel& kernel);
     void display(std::ostream& o) const;

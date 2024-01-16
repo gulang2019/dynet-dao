@@ -62,7 +62,9 @@ endif()
 
 file(GLOB_RECURSE SOURCES *.cc)
 file(GLOB_RECURSE HEADERS *.h)
+set(CUDA_SRCS cuda.cu)
 
 
-add_executable(dao_actual_memory ${SOURCES} ${HEADERS})
+add_executable(dao_actual_memory ${SOURCES} ${CUDA_SRCS} ${HEADERS})
 target_link_libraries(${PROJECT_NAME} ${CUDA_LIBRARIES})
+set_target_properties(dao_actual_memory PROPERTIES CUDA_ARCHITECTURES "70")

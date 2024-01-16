@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <iostream>
 #include <fstream>
 #include <chrono>
@@ -9,6 +10,7 @@
 #include "kernel.h"
 #include "allocator.h"
 #include "memory_manager.h"
+#include "cuda.h"
 
 std::unordered_map<DoubleLinkedListStorage::allocation_strategy_t, std::string> allocation_strategy_names = {
     {DoubleLinkedListStorage::allocation_strategy_t::BEST_FIT, "BEST_FIT"},
@@ -87,10 +89,23 @@ void simulate(
     auto start = std::chrono::high_resolution_clock::now();
 
     auto & compute_stream = allocator.get_compute_stream();
+    std::unordered_set<TensorUID> visited;
+    int i = 0; 
     for (auto& kernel: trace.kernels) {
         //cout<< "processing kernel" << endl;
         //print_kernel(kernel);
+        std::cout << "[" << i++ << "/" << trace.kernels.size() << "]" << std::endl;
         allocator.prepare(kernel);
+        for (auto uid: kernel.accesses) {
+            const TensorRecord& record = allocator.lookup_tensor(uid);
+            DAO_ASSERT(record.status == ONGPU, "tensor %lu is not on GPU", uid);
+            if (visited.find(uid) == visited.end()) {
+                visited.insert(uid);                
+                set_tensor_value(record.block_ptr->physical_location_start, record.tensor_size / sizeof(int), (int)uid);
+            }
+            DAO_ASSERT(record.status == ONGPU, "tensor %lu is not on GPU", uid);
+            DAO_ASSERT(all_equal(record.block_ptr->physical_location_start, record.tensor_size / sizeof(int), (int)uid) == true, "tensor %lu is not equal to its value", uid);
+        }
         //cout << "finish prepare" << endl;
         //compute_stream.commit(kernel.time);
         allocator.complete(kernel);
@@ -105,7 +120,7 @@ void simulate(
     return; 
 }
 
-int verbose = 1; 
+int verbose = 0; 
 /**
  * n m 
  * size1

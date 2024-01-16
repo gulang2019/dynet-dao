@@ -182,7 +182,7 @@ std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
             //compute_stream.wait_for(evict_record->event);
 
             CUDA_CHECK(cudaStreamWaitEvent(D2H_stream, evict_record->event->get()));
-            cout <<  "copying " << evict_record->tensor_size << " bytes from GPU: "<< evicted_block->physical_location_start << " to CPU: " << CPU_block->physical_location_start << " using stream " << D2H_stream << endl;
+            DAO_INFO("copying %lu bytes from GPU %p to CPU %p using stream %d", evict_record->tensor_size, evicted_block->physical_location_start, CPU_block->physical_location_start, D2H_stream);
             CUDA_CHECK(cudaMemcpyAsync(CPU_block->physical_location_start, evicted_block->physical_location_start, evict_record->tensor_size, cudaMemcpyDeviceToHost, D2H_stream)); 
             evict_record->event = std::make_shared<SmartCudaEvent>(D2H_stream, "D2H::" + std::to_string(logical_time) + "::" + evict_record->name);
             CUDA_CHECK(cudaStreamWaitEvent(compute_stream, evict_record->event->get()));
@@ -313,9 +313,14 @@ void Allocator::free(TensorUID tensor_id) {
     global_memory_record->delete_tensor(tensor_id);
 }
 
+TensorRecord& Allocator::lookup_tensor(TensorUID tensor_id) {
+    return global_memory_record->lookup_tensor(tensor_id);
+}
+
 /*
 
 real_time_t Allocator::get_total_time() const {
     return std::max(compute_stream.current(), std::max(H2D_stream.current(), D2H_stream.current()));
 }
 */
+
