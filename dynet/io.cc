@@ -165,9 +165,15 @@ void TextFileLoader::populate(ParameterCollection & model, const std::string & k
     // Load a parameter
     } else if(type == "#Parameter#") {
       values.resize(dim.size());
-      if(param_id >= storage.params.size())
-        DYNET_RUNTIME_ERR("Too many parameters to load in populated model at " << name);
-      ParameterStorage & param = *storage.params[param_id++];
+      for (;; param_id++) {
+        if(param_id >= storage.params.size())
+          DYNET_RUNTIME_ERR("Too many parameters to load in populated model at " << name);
+        auto model_param = storage.params[param_id];
+        if ("/model" + model_param->name == name) 
+          break;
+        std::cerr << "Name mismatch, skip loading /model" << model_param->name << '\n';
+      }
+      ParameterStorage & param = *storage.params[param_id++];      
       if(param.dim != dim)
         DYNET_RUNTIME_ERR("Dimensions of parameter " << name << " looked up from file (" << dim << 
                             ") do not match parameters to be populated (" << param.dim << ")");
@@ -176,8 +182,14 @@ void TextFileLoader::populate(ParameterCollection & model, const std::string & k
     // Load a lookup parameter
     } else if(type == "#LookupParameter#") {
       values.resize(dim.size());
-      if(lookup_id >= storage.lookup_params.size())
-        DYNET_RUNTIME_ERR("Too many lookup parameters in populated model at " << name);
+      for (;; lookup_id++) {
+        if(lookup_id >= storage.lookup_params.size())
+          DYNET_RUNTIME_ERR("Too many lookup parameters in populated model at " << name);
+        auto model_param = storage.lookup_params[lookup_id];
+        if ("/model" + model_param->name == name) 
+          break;
+        std::cerr << "Name mismatch, skip loading /model" << model_param->name << '\n';
+      }
       LookupParameterStorage & param = *storage.lookup_params[lookup_id++];
       if(param.all_dim != dim)
         DYNET_RUNTIME_ERR("Dimensions of lookup parameter " << name << " lookup up from file (" << dim << 
