@@ -46,6 +46,7 @@ unsigned NUM_RESETS = 1;
 bool SAMPLING_TRAINING = false;
 
 bool VERBOSE = false;
+MyTimer timer_g("+");
 
 // ---
 bool load_data(const variables_map& vm
@@ -711,9 +712,13 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 				float elapsed = timer_iteration.elapsed();
 
 				p_sgd->status();
+				cerr << "t=" << timer_g.elapsed()/1000 << "s ";
 				cerr << "sents=" << sid << " ";
-				cerr /*<< "loss=" << tstats._scores[1]*/ << "words=" << tstats._words_tgt << " unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';//<< " E=" << (tstats._scores[1] / tstats._words_tgt) << " ppl=" << exp(tstats._scores[1] / tstats._words_tgt) << ' ';
-				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;  					
+				cerr /*<< "loss=" << tstats._scores[1]*/ << "words=" << tstats._words_tgt << " unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';
+				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;
+				
+				timer_iteration.reset();
+				tstats = ModelStats();
 			}
 			   		 
 			++id;
@@ -754,7 +759,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		}
 		
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
+		cerr << "***DEV [" << "t=" << timer_g.elapsed()/1000 << "s" << " epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
 		if (cpt > 0) cerr << "(not improved, best ppl on dev so far: " << dstats.get_score_string(false)  << ") ";
 		cerr << "[completed in " << elapsed << " ms]" << endl;
 	
@@ -818,7 +823,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	}
 finish:
 	cerr << endl << "Transformer training completed!" << endl;
-	DAO::profiler.dump(model_path + "/train");
+	// DAO::profiler.dump(model_path + "/train");
 }
 // ---
 
