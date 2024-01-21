@@ -149,10 +149,10 @@ class TextFileSaver : public Saver {
   void save(const Parameter & param, const std::string & key = "") override;
   void save(const LookupParameter & param, const std::string & key = "") override;
 
-protected:
   void save(const ParameterStorage & param, const std::string & key = "");
   void save(const LookupParameterStorage & param, const std::string & key = "");
 
+protected:
   std::unique_ptr<std::ostream> p_datastream;
   std::ostream& datastream;
 

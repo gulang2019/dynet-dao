@@ -166,6 +166,8 @@ struct TransformerConfig{
 	float _decoder_sublayer_dropout_rate = 0.1f;
 	float _attention_dropout_rate = 0.1f;
 	float _ff_dropout_rate = 0.1f;
+	int _attn_lora_r = 0;
+	int _ff_lora_r = 0;
 
 	bool _use_label_smoothing = false;
 	float _label_smoothing_weight = 0.1f;
@@ -243,34 +245,7 @@ struct TransformerConfig{
 		_use_dropout = _is_training;
 	}	
 
-	TransformerConfig(const TransformerConfig& tfc){
-		_src_vocab_size = tfc._src_vocab_size;
-		_tgt_vocab_size = tfc._tgt_vocab_size;
-		_num_units = tfc._num_units;
-		_nheads = tfc._nheads;
-		_nlayers = tfc._nlayers;
-		_n_ff_units_factor = tfc._n_ff_units_factor;
-		_encoder_emb_dropout_rate = tfc._encoder_emb_dropout_rate;
-		_encoder_sublayer_dropout_rate = tfc._encoder_sublayer_dropout_rate;
-		_decoder_emb_dropout_rate = tfc._decoder_emb_dropout_rate;
-		_decoder_sublayer_dropout_rate = tfc._decoder_sublayer_dropout_rate;
-		_attention_dropout_rate = tfc._attention_dropout_rate;
-		_ff_dropout_rate = tfc._ff_dropout_rate;
-		_use_label_smoothing = tfc._use_label_smoothing;
-		_label_smoothing_weight = tfc._label_smoothing_weight;
-		_position_encoding = tfc._position_encoding;
-		_position_encoding_flag = tfc._position_encoding_flag;
-		_max_length = tfc._max_length;
-		_sm = tfc._sm;
-		_attention_type = tfc._attention_type;
-		_ffl_activation_type = tfc._ffl_activation_type;
-		_shared_embeddings = tfc._shared_embeddings;
-		_use_hybrid_model = tfc._use_hybrid_model;
-		_use_external_contexts = tfc._use_external_contexts;
-		_is_training = tfc._is_training;
-		_use_dropout = _is_training;
-		_model_path = tfc._model_path;
-	}
+	TransformerConfig(const TransformerConfig& tfc) = default;
 };
 //---
 

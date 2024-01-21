@@ -6,6 +6,7 @@
 #pragma once
 
 // DyNet
+#include "dynet/io.h"
 #include "dynet/globals.h"
 #include "dynet/nodes.h"
 #include "dynet/param-init.h"
@@ -732,7 +733,17 @@ void TransformerLModel::initialise_params_from_file(const std::string &params_fi
 
 void TransformerLModel::save_params_to_file(const std::string &params_file)
 {
-	dynet::save_dynet_model(params_file, _all_params.get());// FIXME: use binary streaming instead for saving disk spaces?
+	auto model =  _all_params.get();
+	const auto &storage = model->get_storage();
+	TextFileSaver saver(params_file);
+	// filter out lora params
+    for (auto & p : storage.params) {
+		if (p->name.find("lora.") != string::npos) continue;
+		saver.save(*p, "/model" + p->name);
+	}
+    for (auto & p : storage.lookup_params) {
+		saver.save(*p, "/model" + p->name);
+	}
 }
 
 void TransformerLModel::set_dropout(bool is_activated){

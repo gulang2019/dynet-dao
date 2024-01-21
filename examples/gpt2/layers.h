@@ -30,16 +30,30 @@ dynet::Expression make_sinusoidal_position_encoding(dynet::ComputationGraph &cg,
 
 //--- Simple Linear Layer (w/ or w/o bias)
 struct LinearLayer{
-	explicit LinearLayer(DyNetModel& mod, unsigned input_dim, unsigned output_dim, bool have_bias=true, bool initLC=false)
-		: _have_bias(have_bias)
+	explicit LinearLayer(DyNetModel& mod, unsigned input_dim, unsigned output_dim, bool have_bias=true, bool initLC=false, int lora_r=0)
+		: _have_bias(have_bias), _lora_r(lora_r)
 	{		
 		if (_have_bias)
 			_p_b = (initLC == false)?mod.add_parameters({output_dim}):mod.add_parameters({output_dim}, ParameterInitLeCunUniform(output_dim), "b");
 		_p_W = (initLC == false)?mod.add_parameters({output_dim, input_dim}):mod.add_parameters({output_dim, input_dim}, ParameterInitLeCunUniform(input_dim), "w");
+		if (_lora_r) {
+			// delta_w = a @ b
+			_p_lora_A = mod.add_parameters({output_dim, _lora_r}, ParameterInitLeCunUniform(_lora_r, std::sqrt(2)), "lora.A");
+			_p_lora_B = mod.add_parameters({_lora_r, input_dim}, ParameterInitConst(0), "lora.B");
+		}
 	}
 
 	dynet::Expression apply(dynet::ComputationGraph& cg, const dynet::Expression& i_x, bool reconstruct_shape=true, bool time_distributed=false){
-		dynet::Expression i_W = dynet::parameter(cg, _p_W);
+		dynet::Expression i_W;
+		if (_lora_r) {
+			i_W = dynet::const_parameter(cg, _p_W);
+			dynet::Expression i_lora_A = dynet::parameter(cg, _p_lora_A);
+			dynet::Expression i_lora_B = dynet::parameter(cg, _p_lora_B);
+			i_W = i_W + i_lora_A * i_lora_B;
+		} else {
+			i_W = dynet::parameter(cg, _p_W);
+		}
+
 		dynet::Expression i_b; 
 		if (_have_bias)
 			i_b = dynet::parameter(cg, _p_b);
@@ -57,11 +71,16 @@ struct LinearLayer{
 		return make_reverse_time_distributed(i_x_out, d[1], b);// ((input_dim, seq_len), batch_size)
 	}
 
+	void merge_lora_weights() {}
+
 	~LinearLayer(){}
 
 	dynet::Parameter _p_W;
 	dynet::Parameter _p_b;
+	dynet::Parameter _p_lora_A;
+	dynet::Parameter _p_lora_B;
 	bool _have_bias = true;
+	int _lora_r;
 };
 
 //--- Highway Network Layer
@@ -97,9 +116,9 @@ struct HighwayNetworkLayer{
 struct FeedForwardLayer{
 	explicit FeedForwardLayer(DyNetModel& mod, TransformerConfig& tfc)
 		: _mod_inner(mod.add_subcollection("c-fc"))
-		, _l_inner(_mod_inner, tfc._num_units, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, true, true)
+		, _l_inner(_mod_inner, tfc._num_units, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, true, true, tfc._ff_lora_r)
 		, _mod_outer(mod.add_subcollection("c-proj"))
-		, _l_outer(_mod_outer, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, tfc._num_units, true, true)
+		, _l_outer(_mod_outer, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, tfc._num_units, true, true, tfc._ff_lora_r)
 	{
 		_p_tfc = &tfc;
 
@@ -212,10 +231,10 @@ struct MultiHeadAttentionLayer{
 		, _mod_k(mod.add_subcollection("wk"))
 		, _mod_v(mod.add_subcollection("wv"))
 		, _mod_o(mod.add_subcollection("c-proj"))
-		, _l_W_Q(_mod_q, tfc._num_units, tfc._num_units, true/*gpt2 use bias*/, true)
-		, _l_W_K(_mod_k, tfc._num_units, tfc._num_units, true, true)
-		, _l_W_V(_mod_v, tfc._num_units, tfc._num_units, true, true)
-		, _l_W_O(_mod_o, tfc._num_units, tfc._num_units, true, true)
+		, _l_W_Q(_mod_q, tfc._num_units, tfc._num_units, true/*gpt2 use bias*/, true, tfc._attn_lora_r)
+		, _l_W_K(_mod_k, tfc._num_units, tfc._num_units, true, true, tfc._attn_lora_r)
+		, _l_W_V(_mod_v, tfc._num_units, tfc._num_units, true, true, tfc._attn_lora_r)
+		, _l_W_O(_mod_o, tfc._num_units, tfc._num_units, true, true, tfc._attn_lora_r)
 #else
 		: _l_W_Q(mod, tfc._num_units, tfc._num_units, false/*linear layer w/o bias*/)
 		, _l_W_K(mod, tfc._num_units, tfc._num_units, false)

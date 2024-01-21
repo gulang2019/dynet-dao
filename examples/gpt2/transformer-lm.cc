@@ -132,6 +132,8 @@ int main(int argc, char** argv) {
 		("num-units,u", value<unsigned>()->default_value(512), "n_embd; 512 by default")
 		("num-heads,h", value<unsigned>()->default_value(8), "use <num> for number of heads in multi-head attention mechanism; 4 by default")
 		("n-ff-units-factor", value<unsigned>()->default_value(4), "use <num> times of input dim for output dim in feed-forward layer; 4 by default")
+		("attn-lora-r", value<unsigned>()->default_value(0), "If non-zero, use lora for attention fine-tune and <num> is the rank of delta-W matrix; 0 by default")
+		("ff-lora-r", value<unsigned>()->default_value(0), "If non-zero, use lora for MLP fine-tune and <num> is the rank of delta-W matrix; 0 by default")
 		//-----------------------------------------
 		("emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for word embeddings; 0.1 by default")
 		("sublayer-dropout-p", value<float>()->default_value(0.1f), "attention dropout; 0.1 by default")
@@ -231,6 +233,8 @@ int main(int argc, char** argv) {
 	SentinelMarkers sm;// sentinel markers
 	WordIdSentences train_cor, devel_cor, test_cor;// integer-converted train and dev data
 	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
+	tfc._attn_lora_r = vm["attn-lora-r"].as<unsigned>();
+	tfc._ff_lora_r = vm["ff-lora-r"].as<unsigned>();
 
 	std::string config_file = model_path + "/model.config";// configuration file path
 
@@ -325,6 +329,12 @@ int main(int argc, char** argv) {
 			tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
 		}
 		cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
+		size_t lora_count = 0;
+		for (const auto param : tf.get_model_parameters().parameters_list()) {
+			if (param->name.find("lora.") != string::npos)
+				lora_count += param->size();
+		}
+		cerr << endl << "Count of LoRA parameters: " << lora_count << '\n';
 
 		// create SGD trainer
 		Trainer* p_sgd_trainer = create_sgd_trainer(vm, tf.get_model_parameters());
