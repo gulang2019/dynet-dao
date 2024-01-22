@@ -30,8 +30,8 @@ dynet::Expression make_sinusoidal_position_encoding(dynet::ComputationGraph &cg,
 
 //--- Simple Linear Layer (w/ or w/o bias)
 struct LinearLayer{
-	explicit LinearLayer(DyNetModel& mod, unsigned input_dim, unsigned output_dim, bool have_bias=true, bool initLC=false, int lora_r=0)
-		: _have_bias(have_bias), _lora_r(lora_r)
+	explicit LinearLayer(DyNetModel& mod, unsigned input_dim, unsigned output_dim, bool have_bias=true, bool initLC=false, int lora_r=0, bool freeze=false)
+		: _have_bias(have_bias), _lora_r(lora_r), _frozen(freeze)
 	{		
 		if (_have_bias)
 			_p_b = (initLC == false)?mod.add_parameters({output_dim}):mod.add_parameters({output_dim}, ParameterInitLeCunUniform(output_dim), "b");
@@ -44,19 +44,21 @@ struct LinearLayer{
 	}
 
 	dynet::Expression apply(dynet::ComputationGraph& cg, const dynet::Expression& i_x, bool reconstruct_shape=true, bool time_distributed=false){
+		using p2e_ty = dynet::Expression (*)(dynet::ComputationGraph&, dynet::Parameter);
+		p2e_ty param2expr = _frozen ? (p2e_ty)dynet::const_parameter : (p2e_ty)dynet::parameter;
 		dynet::Expression i_W;
 		if (_lora_r) {
 			i_W = dynet::const_parameter(cg, _p_W);
-			dynet::Expression i_lora_A = dynet::parameter(cg, _p_lora_A);
-			dynet::Expression i_lora_B = dynet::parameter(cg, _p_lora_B);
+			dynet::Expression i_lora_A = param2expr(cg, _p_lora_A);
+			dynet::Expression i_lora_B = param2expr(cg, _p_lora_B);
 			i_W = i_W + i_lora_A * i_lora_B;
 		} else {
-			i_W = dynet::parameter(cg, _p_W);
+			i_W = param2expr(cg, _p_W);
 		}
 
 		dynet::Expression i_b; 
 		if (_have_bias)
-			i_b = dynet::parameter(cg, _p_b);
+			i_b = param2expr(cg, _p_b);
 	
 		dynet::Expression i_x_in = (!time_distributed)?make_time_distributed(i_x)/*((input_dim, 1), batch_size * seq_len)*/:i_x/*((input_dim, seq_len), batch_size)*/;
 
@@ -71,6 +73,7 @@ struct LinearLayer{
 		return make_reverse_time_distributed(i_x_out, d[1], b);// ((input_dim, seq_len), batch_size)
 	}
 
+	void freeze(bool frozen=true) { _frozen = frozen; }
 	void merge_lora_weights() {}
 
 	~LinearLayer(){}
@@ -81,6 +84,7 @@ struct LinearLayer{
 	dynet::Parameter _p_lora_B;
 	bool _have_bias = true;
 	int _lora_r;
+	bool _frozen = false;
 };
 
 //--- Highway Network Layer
@@ -116,9 +120,9 @@ struct HighwayNetworkLayer{
 struct FeedForwardLayer{
 	explicit FeedForwardLayer(DyNetModel& mod, TransformerConfig& tfc)
 		: _mod_inner(mod.add_subcollection("c-fc"))
-		, _l_inner(_mod_inner, tfc._num_units, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, true, true, tfc._ff_lora_r)
+		, _l_inner(_mod_inner, tfc._num_units, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, true, true, tfc._ff_lora_r, !!tfc._attn_lora_r)
 		, _mod_outer(mod.add_subcollection("c-proj"))
-		, _l_outer(_mod_outer, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, tfc._num_units, true, true, tfc._ff_lora_r)
+		, _l_outer(_mod_outer, tfc._num_units * tfc._n_ff_units_factor/*4 by default according to the paper*/, tfc._num_units, true, true, tfc._ff_lora_r, !!tfc._attn_lora_r)
 	{
 		_p_tfc = &tfc;
 

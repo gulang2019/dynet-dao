@@ -181,6 +181,7 @@ struct LMDecoder{
 	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
 		, const WordIdSentences& sents/*batch of target sentences*/)
 	{
+		bool freeze_embedding = !!_p_tfc->_attn_lora_r;
 		// compute embeddings			
 		// get max length in a batch
 		size_t max_len = sents[0].size();
@@ -229,6 +230,7 @@ struct LMDecoder{
 					}
 				}
 
+				// auto tgt_emb = freeze_embedding ? dynet::const_lookup(cg, _p_embed_t, words) : dynet::lookup(cg, _p_embed_t, words);
 				target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));
 			}
 			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
@@ -247,7 +249,9 @@ struct LMDecoder{
 							positions[bs] = l;
 				}
 
-					pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+					auto pos_emb = freeze_embedding ? 
+							dynet::const_lookup(cg, _p_embed_pos, positions) : dynet::lookup(cg, _p_embed_pos, positions);
+					pos_embeddings.push_back(pos_emb);
 				}
 				dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
 
