@@ -747,7 +747,7 @@ void TransformerLModel::save_params_to_file(const std::string &params_file)
 	TextFileSaver saver(params_file);
 	// filter out lora params
     for (auto & p : storage.params) {
-		if (p->name.find("lora.") != string::npos) continue;
+		// if (p->name.find("lora.") != string::npos) continue;
 		saver.save(*p, "/model" + p->name);
 	}
     for (auto & p : storage.lookup_params) {
