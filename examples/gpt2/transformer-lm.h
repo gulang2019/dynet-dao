@@ -43,8 +43,9 @@ namespace transformer {
 
 //--- LM Decoder Layer
 struct LMDecoderLayer{
-	explicit LMDecoderLayer(DyNetModel& mod, TransformerConfig& tfc)
-		: _mod_attn(mod.add_subcollection("attn"))
+	explicit LMDecoderLayer(DyNetModel& mod, TransformerConfig& tfc, int layer_idx)
+		: _layer_idx(layer_idx)
+		, _mod_attn(mod.add_subcollection("attn"))
 		, _self_attention_sublayer(_mod_attn, tfc, true)
 		, _mod_mlp(mod.add_subcollection("mlp"))
 		, _feed_forward_sublayer(_mod_mlp, tfc)
@@ -61,6 +62,8 @@ struct LMDecoderLayer{
 	}
 
 	~LMDecoderLayer(){}	
+
+	int _layer_idx;
 
 	// multi-head attention sub-layers
 	DyNetModel _mod_attn;
@@ -92,14 +95,15 @@ struct LMDecoderLayer{
 		// stoch depth
 		dynet::Expression i_mh_self_att = i_decl;
 		if (_p_tfc->_use_dropout) { // training
-			if (rand01() > _p_tfc->_attention_dropout_rate) {
+			float attn_skip_prob = _p_tfc->_attention_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1);
+			if (rand01() > attn_skip_prob) {
 				// layer normalisation 1 (prenorm)
 				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 				// multi-head self attention sub-layer
 				i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
 				// element-wise dropout applied within attn sublayer
 			}
-			i_mh_self_att = i_mh_self_att / (1-_p_tfc->_attention_dropout_rate);
+			i_mh_self_att = i_mh_self_att / (1-attn_skip_prob);
 		} else { // inference
 			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 			i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
@@ -110,13 +114,14 @@ struct LMDecoderLayer{
 
 		dynet::Expression i_ff = i_decl;
 		if (_p_tfc->_use_dropout) { // training
-			if (rand01() > _p_tfc->_ff_dropout_rate) {
+			float ff_skip_prob = _p_tfc->_ff_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1);
+			if (rand01() > ff_skip_prob) {
 				// layer normalisation 3 (prenorm)
 				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 				// position-wise feed-forward sub-layer
 				i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
 			}
-			i_ff = i_ff / (1-_p_tfc->_ff_dropout_rate);
+			i_ff = i_ff / (1-ff_skip_prob);
 		} else { // inference
 			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 			i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
@@ -140,7 +145,7 @@ struct LMDecoder{
 
 		for (unsigned l = 0; l < tfc._nlayers; l++){
 			auto mod_layer = mod->add_subcollection("blocks." + to_string(l));
-			_v_dec_layers.push_back(LMDecoderLayer(mod_layer, tfc));
+			_v_dec_layers.push_back(LMDecoderLayer(mod_layer, tfc, l));
 			_mod_layers.push_back(mod_layer);
 		}
 
