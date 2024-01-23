@@ -102,15 +102,16 @@ struct LMDecoderLayer{
 				// multi-head self attention sub-layer
 				i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
 				// element-wise dropout applied within attn sublayer
-			}
-			i_mh_self_att = i_mh_self_att / (1-attn_skip_prob);
+
+				i_mh_self_att = i_mh_self_att / (1-attn_skip_prob);
+				i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)		
+			} // else skipped, residual=0
 		} else { // inference
 			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 			i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
-		}
 
-		// w/ residual connection
-		i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)		
+			i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)		
+		}
 
 		dynet::Expression i_ff = i_decl;
 		if (_p_tfc->_use_dropout) { // training
@@ -120,15 +121,16 @@ struct LMDecoderLayer{
 				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 				// position-wise feed-forward sub-layer
 				i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
-			}
-			i_ff = i_ff / (1-ff_skip_prob);
+
+				i_ff = i_ff / (1-ff_skip_prob);
+				i_decl = i_decl + i_ff;
+			} // else skipped, residual=0
 		} else { // inference
 			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 			i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
-		}
 
-		// w/ residual connection
-		i_decl = i_decl + i_ff;
+			i_decl = i_decl + i_ff;
+		}
 
 		return i_decl;
 	}
