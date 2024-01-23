@@ -23,4 +23,6 @@ struct Profiler {
     void dump(const std::string& filename);
 };
 
+extern Profiler profiler; 
+
 }

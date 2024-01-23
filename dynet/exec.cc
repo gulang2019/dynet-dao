@@ -157,6 +157,13 @@ const Tensor& SimpleExecutionEngine::incremental_forward(VariableIndex i) {
           DAO::profiler.start();
         }
 #endif 
+        std::vector<std::string> input_ptrs;
+        for (auto x : xs) {
+          std::stringstream ss;
+          ss << x->v;
+          input_ptrs.push_back(ss.str());
+        }
+        DAO_INFO_LEVEL(1, "DyNet FWD %p = %s", node_fx.v, node->as_string(input_ptrs).c_str());
         node->forward(xs, node_fx);
 #ifdef USE_DAO 
         if(DAO::profile_enabled){
@@ -286,6 +293,7 @@ void SimpleExecutionEngine::backward(VariableIndex from_where, bool full) {
             DAO::profiler.start();
           }
 #endif 
+          DAO_INFO_LEVEL(1, "DyNet BWD %u %p = %s", ai, node_dEdxai.v, node->as_dummy_string().c_str());
           node->backward(xs, node_fx, node_dEdfx, ai, node_dEdxai);
 #ifdef USE_DAO
           if(DAO::profile_enabled){
@@ -564,7 +572,7 @@ const Tensor& BatchedExecutionEngine::incremental_forward_no_update(
             node2successors.push_back(j);
             node2successors[arg] = node2successors.size();
             node2successors.push_back(n2sptr);
-            depth = max(node2depth[arg] + 1, depth);
+            depth = std::max(node2depth[arg] + 1, depth);
           }
         }
         node2depth[j] = depth;
@@ -576,7 +584,7 @@ const Tensor& BatchedExecutionEngine::incremental_forward_no_update(
           if (autobatch_strategy == 3) {
             ++depthprofcnt[(depth * upto) + sig];
           }
-          abmax = (VariableIndex)max((int)abmax, sig+1);
+          abmax = (VariableIndex)std::max((int)abmax, sig+1);
           prof2avg[sig] += depth;
           prof2cnt[sig]++;
           if(depth == 0) {
@@ -716,7 +724,7 @@ const Tensor& BatchedExecutionEngine::incremental_forward_no_update(
         depth = 0;
         node = cg.nodes[j];
         for (auto k : node->args)
-          depth = max(node2depth[k]+1,depth);
+          depth = std::max(node2depth[k]+1,depth);
         node2depth[j] = depth;
         node2size[j] = node->dim.size();
         sig = node->autobatch_sig(cg, sigmap);
@@ -944,7 +952,7 @@ const Tensor& BatchedExecutionEngine::incremental_forward(VariableIndex i) {
     incremental_forward_no_update(i, autobatch_flag);
   }
 
-  num_nodes_evaluated = max(i + 1, num_nodes_evaluated);	
+  num_nodes_evaluated = std::max(i + 1, num_nodes_evaluated);	
   return get_nfx(i);
 }
 

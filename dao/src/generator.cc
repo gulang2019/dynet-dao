@@ -4,20 +4,22 @@
 
 namespace DAO {
 
-DAO_API ConcurrentQueue<Kernel> kernel_queue = {};
-DAO_API ConcurrentCounter kernel_counter = {};
-DAO_API ConcurrentValue<pid_t> executor_tid;
-
-void push_kernel(Kernel&& kernel)
-{
-  kernel._tid = gettid();
-  // Create a lambda function that captures the original function and its arguments
-  kernel_counter.increment();
-  kernel_queue.push(std::move(kernel));
+void push(std::vector<dynet::Tensor*>& vec, const std::vector<const dynet::Tensor*>& to_push) {
+    for (const auto& tensor : to_push) {
+        // Assuming you want to add the const pointers to the non-const vector
+        // You need to ensure this is safe and does not lead to undefined behavior.
+        vec.push_back(const_cast<dynet::Tensor*>(tensor));
+    }
 }
 
-pid_t get_executor_tid() {
-  return executor_tid.get();
+
+void push(std::vector<TensorUID>& vec, const std::vector<TensorUID>& to_push) {
+    vec.insert(vec.end(), to_push.begin(), to_push.end());
 }
+
+void push(std::vector<TensorUID>& vec, TensorUID to_push) {
+    vec.push_back(to_push);
+}
+
 
 } // DAO 

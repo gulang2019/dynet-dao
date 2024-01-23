@@ -288,7 +288,7 @@ void ParameterCollectionStorage::project_weights(float radius) {
   double gg = 0;
   for (int i = 0; i < pi; ++i)
     gg += project_scratch[i];
-  cerr << "NORM: " << sqrt(gg) << endl;
+  cerr << "NORM: " << std::sqrt(gg) << endl;
 }
 
 ParameterCollection::ParameterCollection() : name("/"), storage(new ParameterCollectionStorage(default_weight_decay_lambda)), parent(nullptr) { }

@@ -9,13 +9,11 @@
 #include <deque>
 #include <iostream>
 
-#include <DAO/globals.h>
-#include <DAO/allocator.h>
-#include <cuda_runtime.h>
-
-using namespace std;
+#include "globals.h"
 
 namespace DAO {
+
+struct TensorRecord;
 
 struct MemBlock {
     bool allocated = false;
@@ -34,17 +32,28 @@ struct DeviceRawMallocr {
     virtual size_t mem_limit() = 0;
 };
 
-struct CPUMallocr: public DeviceRawMallocr {
+struct VirtualMallocr: public DeviceRawMallocr {
     void* raw_malloc(size_t size) override;
     void raw_free(void*) override;
     size_t mem_limit() override;
+    size_t allocated = 1024;
 };
 
-struct GPUMallocr: public DeviceRawMallocr {
+struct CPURealMallocr: public DeviceRawMallocr {
     void* raw_malloc(size_t size) override;
     void raw_free(void*) override;
     size_t mem_limit() override;
+    size_t allocated = 1024;
 };
+
+struct GPURealMallocr: public DeviceRawMallocr {
+    void* raw_malloc(size_t size) override;
+    void raw_free(void*) override;
+    size_t mem_limit() override;
+    size_t allocated = 1024;
+};
+
+
 
 class MemStorage{
 protected: 
@@ -57,6 +66,7 @@ public:
         VIRTUAL
     }device_type;
     MemStorage(device_type_t device_type, const std::string& name = "MemStorage");
+    virtual size_t get_max_usage() const = 0;
     virtual std::shared_ptr<MemBlock> allocate(size_t size) = 0;
     virtual void free(const std::shared_ptr<MemBlock>& block) = 0;
     /**
@@ -82,14 +92,24 @@ public:
     virtual std::shared_ptr<MemBlock> mergeAndAllocate(size_t size, const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back) = 0;
     virtual void display(std::ostream& o) const = 0; 
     virtual ~MemStorage() = default;
+    virtual bool check_MemStorage() = 0;
 };
 
 class DoubleLinkedListStorage : public MemStorage {
 public: 
-    enum strategy_t {
+    enum allocation_strategy_t {
         FIRST_FIT,
         BEST_FIT,
         WORST_FIT
+    };
+
+    enum eviction_strategy_t {
+        EVI_FIRST_FIT, 
+        EVI_BEST_FIT,
+        BELADY,
+        WEIGHTED_BELADY,
+        LRU,
+        WEIGHTED_LRU 
     };
     
     DoubleLinkedListStorage(
@@ -98,8 +118,8 @@ public:
         logical_time_t& logical_time,
         size_t mem_limit = size_t(-1),
         size_t grow_size = (1 << 20),
-        strategy_t allocation_strategy = FIRST_FIT,
-        strategy_t eviction_strategy = FIRST_FIT,
+        allocation_strategy_t allocation_strategy = allocation_strategy_t::FIRST_FIT,
+        eviction_strategy_t eviction_strategy = eviction_strategy_t::EVI_FIRST_FIT,
         size_t split_threshold = (1 << 10),
         size_t alignment = 128u);
     ~DoubleLinkedListStorage();
@@ -110,6 +130,14 @@ public:
         const std::deque<size_t>& sizes,
         const std::deque<size_t>& next_accesses
     );
+    inline double lru_score(
+        const std::shared_ptr<MemBlock>& front, 
+        const std::shared_ptr<MemBlock>& back
+    );
+    inline double belady_score(
+        const std::shared_ptr<MemBlock>& front, 
+        const std::shared_ptr<MemBlock>& back
+    );
     inline bool split_cond(size_t block_size, size_t required_size);
     std::shared_ptr<MemBlock> allocate(size_t size) override;
     void free(const std::shared_ptr<MemBlock>& block) override;
@@ -118,15 +146,17 @@ public:
     std::shared_ptr<MemBlock> merge(const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back) override;
     std::shared_ptr<MemBlock> mergeAndAllocate(size_t size, const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back) override;
     void display(std::ostream& o) const override;
+    bool check_MemStorage() override;
+    size_t get_max_usage() const override; 
 
 private: 
     inline void display(std::ostream& o, const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back, bool exclusive = false) const;
     bool splitAndAllocate(size_t size, std::shared_ptr<MemBlock>& block);
-    strategy_t allocation_strategy;
-    strategy_t eviction_strategy;
+    allocation_strategy_t allocation_strategy;
+    eviction_strategy_t eviction_strategy;
     size_t alignment;
     size_t split_threshold;  
-    size_t allocated;
+    unsigned long allocated;
     size_t grow_size; 
     size_t mem_limit;
     std::shared_ptr<MemBlock> start;
@@ -135,6 +165,6 @@ private:
     const logical_time_t& logical_time; 
 };
 
-} // namespace DAO
 
+} // namespace dao 
 #endif 

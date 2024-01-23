@@ -20,10 +20,6 @@
 #include <device_launch_parameters.h>
 #endif
 
-#ifdef USE_DAO 
-#include <DAO/DAO.h>
-#endif 
-
 using namespace std;
 
 namespace dynet {
@@ -142,6 +138,12 @@ DynetParams extract_dynet_params(int& argc,
       }
     }
 
+    else if (startswith(arg, "--dao-debug") || 
+            startswith(arg, "--dao_debug")) {
+      DAO::debug_mode = true;
+      remove_args(argc, argv, argi, 1);
+    }
+
     // Weight decay
     else if (startswith(arg, "--dao-enable-offload") ||
              startswith(arg, "--dao_enable_offload")) {
@@ -154,21 +156,10 @@ DynetParams extract_dynet_params(int& argc,
       }
     }
 
-    else if (startswith(arg, "--dao-cpu-mem-limit") ||
-             startswith(arg, "--dao_cpu_mem_limit")) {
-      if (!has_arg(argi, argc, argv)) {
-        throw std::invalid_argument("--dao_enable_offload");
-      } else {
-        string a2 = get_arg(argi, argv);
-        istringstream d(a2); d >> DAO::cpu_mem_limit;
-        remove_args(argc, argv, argi, 2);
-      }
-    }
-
     else if (startswith(arg, "--dao-cpu-mem") ||
              startswith(arg, "--dao_cpu_mem")) {
       if (!has_arg(argi, argc, argv)) {
-        throw std::invalid_argument("--dao_enable_offload");
+        throw std::invalid_argument("--dao_cpu_mem(MB)");
       } else {
         string a2 = get_arg(argi, argv);
         istringstream d(a2); d >> DAO::cpu_mem;
@@ -176,21 +167,10 @@ DynetParams extract_dynet_params(int& argc,
       }
     }
 
-    else if (startswith(arg, "--dao-gpu-mem-limit") ||
-             startswith(arg, "--dao_gpu_mem_limit")) {
-      if (!has_arg(argi, argc, argv)) {
-        throw std::invalid_argument("--dao_enable_offload");
-      } else {
-        string a2 = get_arg(argi, argv);
-        istringstream d(a2); d >> DAO::gpu_mem_limit;
-        remove_args(argc, argv, argi, 2);
-      }
-    }
-
     else if (startswith(arg, "--dao-gpu-mem") ||
              startswith(arg, "--dao_gpu_mem")) {
       if (!has_arg(argi, argc, argv)) {
-        throw std::invalid_argument("--dao_enable_offload");
+        throw std::invalid_argument("--dao_gpu_mem(MB)");
       } else {
         string a2 = get_arg(argi, argv);
         istringstream d(a2); d >> DAO::gpu_mem;
@@ -360,6 +340,8 @@ void initialize(DynetParams& params) {
 #if HAVE_CUDA
   if (default_device->type == DeviceType::GPU) {
     auto default_gpu_device = static_cast<Device_GPU *>(default_device);
+    DAO::default_stream = default_gpu_device->estream->stream();
+    DAO::default_device_id = default_gpu_device->cuda_device_id;
     CUDA_CHECK(cudaSetDevice(default_gpu_device->cuda_device_id));
   }
 #endif

@@ -217,19 +217,7 @@ void Trainer::update() {
     assert(params[i]->updated);
     if(params[i]->updated) {
       update_params(gscale, i);
-#ifdef USE_DAO 
-    if (DAO::async_enabled) {
-      DAO::Kernel kernel;
-      kernel.set_name(("clear params " + params[i]->name).c_str());
-      kernel.set_impl([param = params[i]](DAO::Kernel*){param->clear();});
-      DAO::push_kernel(std::move(kernel));
-    }
-    else {
       params[i]->clear();
-    }
-#else 
-      params[i]->clear();
-#endif 
     }
   }
   for(size_t i = 0; i < lparams.size(); ++i) {
@@ -242,18 +230,7 @@ void Trainer::update() {
       } else {
         update_lookup_params(gscale, i);
       }
-#ifdef USE_DAO
-    if (DAO::async_enabled){
-      DAO::Kernel kernel;
-      kernel.set_name(("clear params " + params[i]->name).c_str());
-      kernel.set_impl([param = p](DAO::Kernel*){param->clear();});
-      DAO::push_kernel(std::move(kernel));
-    } else {
       p->clear();
-    }
-#else 
-      p->clear();
-#endif 
     }
   }
 
@@ -522,7 +499,7 @@ void Trainer::swap_params_to_ma_rule_dev(
         case MovingAverage::Exponential:
             if (bias_correction)
             {
-                const real pow_beta = pow(ema_beta, ma_updates);
+                const real pow_beta = std::pow(ema_beta, ma_updates);
                 const real scale = 1.f / (1.f - pow_beta);
                 tvec(*p).device(*dev.edevice) = scale * tvec(*ma);
             }
@@ -991,7 +968,7 @@ void AdamTrainer::update_rule_dev(const MyDevice & dev, real gscale, const std::
   tvec(*ts[1]).device(*dev.edevice) = tvec(*ts[1]) * gscale;
   tvec(*ts[2]).device(*dev.edevice) = tvec(*ts[2]) * beta_1 + tvec(*ts[1]) * (1.f - beta_1);
   tvec(*ts[3]).device(*dev.edevice) = tvec(*ts[3]) * beta_2 + tvec(*ts[1]).square() * (1.f - beta_2);
-  float lr_t = learning_rate * sqrt(1-pow(beta_2, updates+1))/(1-pow(beta_1, updates+1))/ model->get_weight_decay().current_weight_decay();
+  float lr_t = learning_rate * std::sqrt(1-std::pow(beta_2, updates+1))/(1-std::pow(beta_1, updates+1))/ model->get_weight_decay().current_weight_decay();
   tvec(*ts[0]).device(*dev.edevice) -= tvec(*ts[2]) / (tvec(*ts[3]).sqrt() + epsilon) * lr_t;
 }
 DYNET_TRAINER_INST_DEV_IMPL(AdamTrainer)
@@ -1071,7 +1048,7 @@ void AmsgradTrainer::update_rule_dev(const MyDevice & dev, real gscale, const st
   tvec(*ts[2]).device(*dev.edevice) = tvec(*ts[2]) * beta_1 + tvec(*ts[1]) * (1.f - beta_1);
   tvec(*ts[3]).device(*dev.edevice) = tvec(*ts[3]) * beta_2 + tvec(*ts[1]).square() * (1.f - beta_2);
   tvec(*ts[4]).device(*dev.edevice) = tvec(*ts[4]).cwiseMax(tvec(*ts[3]));
-  float lr_t = learning_rate * sqrt(1-pow(beta_2, updates+1))/(1-pow(beta_1, updates+1))/ model->get_weight_decay().current_weight_decay();
+  float lr_t = learning_rate * std::sqrt(1-std::pow(beta_2, updates+1))/(1-std::pow(beta_1, updates+1))/ model->get_weight_decay().current_weight_decay();
   tvec(*ts[0]).device(*dev.edevice) -= tvec(*ts[2]) / (tvec(*ts[4]).sqrt() + epsilon) * lr_t;
 }
 DYNET_TRAINER_INST_DEV_IMPL(AmsgradTrainer)

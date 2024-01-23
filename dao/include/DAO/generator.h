@@ -14,14 +14,20 @@
 
 namespace DAO {
 
+void push(std::vector<dynet::Tensor*>& vec, const std::vector<const dynet::Tensor*>& to_push);
+
+void push(std::vector<TensorUID>& vec, const std::vector<TensorUID>& to_push); 
+
+void push(std::vector<TensorUID>& vec, TensorUID to_push);
+
 struct Kernel {
   std::function<void(Kernel*)> _impl;
   std::vector<TensorUID> _inputs;
   std::vector<TensorUID> _outputs;  
   std::vector<TensorUID> _free_list;
+  std::vector<TensorUID> _zeroed;
   std::string _name = ""; 
   pid_t _tid = 0;
-  bool _stop = false; 
 
   Kernel& set_impl(std::function<void(Kernel*)> impl) {
     this->_impl = impl;
@@ -30,29 +36,20 @@ struct Kernel {
 
   template<typename... Args>
   Kernel& set_inputs(Args... args){
-    (_inputs.push_back(args), ...);
+    (push(_inputs, args), ...);
     return (*this);
   }
 
   template<typename... Args>
   Kernel& set_outputs(Args...args) {
-    (_outputs.push_back(args), ...);
+    (push(_outputs, args), ...);
     return (*this);
   }
   
   template<typename... Args>
-  Kernel& set_free(Args...args) {
-    (_free_list.push_back(args), ...);
+  Kernel& set_zeroed(Args...args) {
+    (push(_zeroed, args), ...);
     return (*this);
-  }
-
-  Kernel& set_stop() {
-    _stop = true;
-    return *this;
-  }
-
-  bool is_stop() const {
-    return _stop;
   }
 
   Kernel& set_name(const char* name) {
@@ -60,9 +57,6 @@ struct Kernel {
     return *this;
   }
 }; 
-
-DAO_API void push_kernel(Kernel&& kernel);
-DAO_API pid_t get_executor_tid();
 
 } // namespace DAO 
 #endif // DAO_KERNEL_QUEUE_H_

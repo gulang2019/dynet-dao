@@ -3,7 +3,6 @@
 * Updated: 1 Nov 2017
 */
 #include <DAO/DAO.h> 
-#include <DAO/interface-dynet.h>
 #include "transformer-lm.h"
 
 using namespace std;

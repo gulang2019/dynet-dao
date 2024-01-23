@@ -10,6 +10,10 @@
 #include "dynet/except.h"
 #include "dynet/str-util.h"
 
+#if USE_DAO 
+#include <DAO/allocator.h>
+#endif
+
 using namespace std;
 
 namespace dynet {
@@ -82,7 +86,11 @@ void Device::revert(const DeviceMempoolSizes & cp) {
 void Device::allocate_tensor(DeviceMempool mp, Tensor & tens) {
   DYNET_ASSERT(mp != DeviceMempool::NONE, "Attempt to allocate tensor for NONE DeviceMempool");
   DYNET_ASSERT(pools[(int)mp] != nullptr, "Attempt to allocate tensor for null DeviceMempool");
+#if USE_DAO 
+  tens.v = (float*)DAO::dao_allocator.prepare(&tens, true);
+#else 
   tens.v = (float*)pools[(int)mp]->allocate(tens.d.size() * sizeof(float));
+#endif 
   DYNET_ASSERT(tens.v != nullptr, "Allocated tensor is zero");
   tens.mem_pool = mp;
 }

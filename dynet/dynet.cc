@@ -11,10 +11,6 @@
 #include "dynet/devices.h"
 #include "dynet/timing.h"
 
-#ifdef USE_DAO 
-#include "DAO/interface-dynet.h"
-#endif 
-
 using namespace std;
 
 namespace dynet {
@@ -72,21 +68,6 @@ void Node::autobatch_reshape_concatonly(const ComputationGraph & cg,
 }
 
 ComputationGraph::ComputationGraph() {
-#ifdef USE_DAO // there are data races on n_hgs
-  if (DAO::async_enabled){
-    DAO_INFO("Using AsyncExecutionEngine");
-    ee.reset(new DAO::AsyncExecutionEngine(*this));
-  }
-  else if (DAO::offload_enabled) {
-    DAO_INFO("Using offloadExecutionEngine");
-    ee.reset(new DAO::OffloadExecutionEngine(*this));
-  }
-  else {
-    DAO_INFO("Using SimpleExecutionEngine");
-    ee.reset(new SimpleExecutionEngine(*this));
-    ++n_hgs;
-  }
-#else  
   if(autobatch_flag) {
     ee.reset(new BatchedExecutionEngine(*this));
   } else {
@@ -97,7 +78,6 @@ ComputationGraph::ComputationGraph() {
     throw std::runtime_error("Attempted to create >1 CG");
   }
   ++n_hgs;
-#endif 
   immediate_compute = false;
   check_validity = false;
   ++n_cumul_hgs;
@@ -105,14 +85,6 @@ ComputationGraph::ComputationGraph() {
 }
 
 ComputationGraph::ComputationGraph(bool batched) {
-#ifdef USE_DAO
-  if (DAO::async_enabled)
-    ee.reset(new DAO::AsyncExecutionEngine(*this));
-  else {
-    ee.reset(new SimpleExecutionEngine(*this));
-    ++n_hgs;
-  }
-#else 
   if(batched) {
     ee.reset(new BatchedExecutionEngine(*this));
   } else {
@@ -123,7 +95,6 @@ ComputationGraph::ComputationGraph(bool batched) {
     throw std::runtime_error("Attempted to create >1 CG");
   }
   ++n_hgs;
-#endif 
   immediate_compute = false;
   check_validity = false;
   ++n_cumul_hgs;
