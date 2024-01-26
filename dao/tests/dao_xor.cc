@@ -1,5 +1,4 @@
 #include <DAO/DAO.h> 
-#include <DAO/interface-dynet.h>
 
 #include <dynet/dynet.h>
 #include <dynet/training.h>
@@ -45,13 +44,18 @@ void test_add() {
         // construct graph 
         const Tensor& loss = cg->forward(loss_expr);        
         if (iter % 10 == 0) {
-            DAO::sync();
             losses.push_back(as_scalar(loss));
             std::cout << "loss: " << losses.back() << std::endl;
         }
         cg->backward(loss_expr);
         // DAO::sync();
         trainer.update();
+        /**
+         engine.symbolic_forward(cg, loss);
+         engine.symbolic_backward();
+         engine.symbolic_update();
+         engine.forward();
+        */
     }
     
     // std::shared_ptr<ComputationGraph> cg = std::make_unique<ComputationGraph>();
