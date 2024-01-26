@@ -73,10 +73,10 @@ ComputationGraph::ComputationGraph() {
   } else {
     ee.reset(new SimpleExecutionEngine(*this));
   }
-  if (n_hgs > 0) {
-    cerr << "Memory allocator assumes only a single ComputationGraph at a time.\n";
-    throw std::runtime_error("Attempted to create >1 CG");
-  }
+  // if (n_hgs > 0) {
+  //   cerr << "Memory allocator assumes only a single ComputationGraph at a time.\n";
+  //   throw std::runtime_error("Attempted to create >1 CG");
+  // }
   ++n_hgs;
   immediate_compute = false;
   check_validity = false;

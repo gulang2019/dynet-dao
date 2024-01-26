@@ -11,3 +11,5 @@ macro(ADD_EXAMPLE TARGET)
 endmacro(ADD_EXAMPLE)
 
 ADD_EXAMPLE(dao_xor)
+ADD_EXAMPLE(forward_test)
+ADD_EXAMPLE(training_test)

@@ -246,7 +246,7 @@ public:
 
   ParameterCollection* model;  // parameters and gradients live here
 
-protected:
+// protected:
   Trainer() {}
   virtual unsigned alloc_impl() {
       return static_cast<unsigned>(model->parameters_list().size()) - aux_allocated;

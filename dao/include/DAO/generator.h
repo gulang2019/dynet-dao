@@ -29,32 +29,32 @@ struct Kernel {
   std::string _name = ""; 
   pid_t _tid = 0;
 
-  Kernel& set_impl(std::function<void(Kernel*)> impl) {
+  Kernel&& set_impl(std::function<void(Kernel*)> impl) {
     this->_impl = impl;
-    return *this; 
+    return std::move(*this); 
   }
 
   template<typename... Args>
-  Kernel& set_inputs(Args... args){
+  Kernel&& set_inputs(Args... args){
     (push(_inputs, args), ...);
-    return (*this);
+    return std::move(*this);
   }
 
   template<typename... Args>
-  Kernel& set_outputs(Args...args) {
+  Kernel&& set_outputs(Args...args) {
     (push(_outputs, args), ...);
-    return (*this);
+    return std::move(*this);
   }
   
   template<typename... Args>
-  Kernel& set_zeroed(Args...args) {
+  Kernel&& set_zeroed(Args...args) {
     (push(_zeroed, args), ...);
-    return (*this);
+    return std::move(*this);
   }
 
-  Kernel& set_name(const char* name) {
+  Kernel&& set_name(const char* name) {
     _name = std::string(name);
-    return *this;
+    return std::move(*this);
   }
 }; 
 

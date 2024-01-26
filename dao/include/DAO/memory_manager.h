@@ -58,13 +58,14 @@ struct GPURealMallocr: public DeviceRawMallocr {
 class MemStorage{
 protected: 
     std::unique_ptr<DeviceRawMallocr> device_mallocr;
-    std::string name; 
+    
 public:
     enum device_type_t {
         CPU,
         GPU,
         VIRTUAL
     }device_type;
+    std::string name;
     MemStorage(device_type_t device_type, const std::string& name = "MemStorage");
     virtual size_t get_max_usage() const = 0;
     virtual std::shared_ptr<MemBlock> allocate(size_t size) = 0;
@@ -154,9 +155,9 @@ private:
     bool splitAndAllocate(size_t size, std::shared_ptr<MemBlock>& block);
     allocation_strategy_t allocation_strategy;
     eviction_strategy_t eviction_strategy;
-    size_t alignment;
     size_t split_threshold;  
     unsigned long allocated;
+    size_t alignment;
     size_t grow_size; 
     size_t mem_limit;
     std::shared_ptr<MemBlock> start;

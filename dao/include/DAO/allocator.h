@@ -110,7 +110,7 @@ private:
     logical_time_t logical_time = 0;
     logical_time_t registered_time = 0; 
     
-    std::vector<Kernel> kernels;
+    Kernel last_kernel;
     std::unordered_set<TensorUID> freed_tensors;
     // tensor_values for debug usage 
     std::unordered_map<TensorUID, std::vector<float> > tensor_values;
@@ -149,6 +149,7 @@ public:
     std::vector<float> get_values(TensorUID tensor_id);
     // free all intermidiate tensors
     void free_intermidiates();
+    Kernel& get_last_kernel();
     ~Allocator();
 };
 

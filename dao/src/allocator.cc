@@ -59,7 +59,6 @@ void Allocator::init(
 ) {
     size_t gpu_free_mem, gpu_total_mem;
     cudaMemGetInfo(&gpu_free_mem, &gpu_total_mem);
-    size_t cpu_free_mem, cpu_total_mem; 
     struct sysinfo info;
     sysinfo(&info);
     //cout << "GPU memory initial size" << device.mem_limit << endl;
@@ -81,7 +80,7 @@ void Allocator::init(
     CUDA_CHECK(cudaStreamCreate(&H2D_stream));
     CUDA_CHECK(cudaStreamCreate(&D2H_stream));
 
-    DAO_INFO_LEVEL(1, "Init GPU device %d, Mem %d MB, CPU %d MB, Compute %d, H2D %d, D2H %d", DAO::default_device_id, (gpu_init_size >> 20), (cpu_init_size >> 20),  compute_stream, H2D_stream, D2H_stream);
+    DAO_INFO_LEVEL(1, "Init GPU device %d, Mem %ld MB, CPU %ld MB, Compute %p, H2D %p, D2H %p", DAO::default_device_id, (gpu_init_size >> 20), (cpu_init_size >> 20),  compute_stream, H2D_stream, D2H_stream);
 }
 
 
@@ -139,7 +138,7 @@ void* Allocator::prepare(TensorUID uid, bool is_global){
 std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
     std::shared_ptr<MemBlock> block = gpu_manager->allocate(size);
     if (block != nullptr) {
-        return std::move(block);
+        return block;
     }
     std::vector<std::shared_ptr<MemBlock>> to_evict_blocks;
     std::shared_ptr<MemBlock> front, back;
@@ -159,7 +158,7 @@ std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
         } else {
             if (evict_record->event != nullptr)
                 CUDA_CHECK(cudaStreamWaitEvent(D2H_stream, evict_record->event->get()));
-            DAO_INFO_LEVEL(2, "copying %lu bytes from GPU %p to CPU %p using stream %d", evict_record->tensor_size, evicted_block->physical_location_start, CPU_block->physical_location_start, D2H_stream);
+            DAO_INFO_LEVEL(2, "copying %lu bytes from GPU %p to CPU %p using stream %p", evict_record->tensor_size, evicted_block->physical_location_start, CPU_block->physical_location_start, D2H_stream);
             CUDA_CHECK(cudaMemcpyAsync(CPU_block->physical_location_start, evicted_block->physical_location_start, evict_record->tensor_size, cudaMemcpyDeviceToHost, D2H_stream)); 
             evict_record->event = std::make_shared<SmartCudaEvent>(D2H_stream, "D2H::" + std::to_string(logical_time) + "::" + evict_record->name);
             if (evict_record->event != nullptr)
@@ -175,7 +174,7 @@ std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
     }
     std::shared_ptr<MemBlock> GPU_block = gpu_manager -> mergeAndAllocate(size, front, back);
     DAO_INFO_LEVEL(1, "allocated %lu on GPU, evict %lu blocks", size, to_evict_blocks.size());
-    return std::move(GPU_block);
+    return GPU_block;
 }
 
 
@@ -325,6 +324,7 @@ void Allocator::free_intermidiates() {
     for (auto& tensor_id: tensor_ids) {
         free(tensor_id);
     }
+    freed_tensors.clear();
 }
 
 std::vector<float> Allocator::get_values(TensorUID tensor_id) {
@@ -360,6 +360,7 @@ void Allocator::Register(Kernel&& kernel) {
     zero_init_tensors.insert(kernel._zeroed.begin(), kernel._zeroed.end());
     global_memory_record->Register(all_accesses.back(), registered_time);
     registered_time++;
+    last_kernel = std::move(kernel);
 }
 
 void GlobalMemRecord::Register(std::unordered_set<TensorUID>& tensor_ids, logical_time_t t) {
@@ -372,7 +373,8 @@ void GlobalMemRecord::Register(std::unordered_set<TensorUID>& tensor_ids, logica
 void GlobalMemRecord::cal_last_access() {
     for (auto& pair: tensor_record_table) {
         auto& record = pair.second;
-        DAO_COND_WARNING(record.access_pattern.empty(), "access pattern empty");
+        // some tensor is not accessed
+        // DAO_COND_WARNING(record.access_pattern.empty(), "some tensor is not accessed");
         if (record.record_type == TensorRecord::GLOBAL) 
             record.last_access = (logical_time_t)(-1);
         else 
@@ -435,6 +437,10 @@ void GlobalMemRecord::self_check() const {
         if (record_a.status == ONCPU && record_b.status == ONCPU)
             DAO_ASSERT(record_a.block_ptr->physical_location_end <= record_b.block_ptr->physical_location_start, "tensor %lu and %lu overlap", (size_t)tensor_ids[i] & 0xfff, (size_t)tensor_ids[i + 1] & 0xfff);
     }
+}
+
+Kernel& Allocator::get_last_kernel() {
+    return last_kernel;
 }
 
 } // namespace DAO

@@ -3,6 +3,9 @@
 
 #include <dynet/dynet.h>
 #include <dynet/expr.h>
+#include <dynet/training.h>
+#include <dynet/model.h>
+
 #include <vector>
 
 #include <DAO/allocator.h>
@@ -24,7 +27,7 @@ struct Instruction{
 };
 
 struct Engine {
-    Engine();
+    Engine(dynet::Trainer* trainer = nullptr);
 
     const dynet::Tensor& symbolic_forward(std::shared_ptr<dynet::ComputationGraph> cg, 
             const dynet::Expression& expr);
@@ -53,6 +56,13 @@ struct Engine {
         dynet::VariableIndex dEdxai_idx;
     };
 
+    struct UPDKernel {
+        float gscale;
+        std::vector<dynet::Tensor*> values;
+        std::shared_ptr<dynet::ParameterStorage> p;
+        std::shared_ptr<dynet::LookupParameterStorage> lp;
+    };
+
     std::vector<std::vector<dynet::Tensor*>> nfxss;
     std::vector<std::vector<dynet::Tensor*>> fwdtmpss; 
     std::vector<std::vector<dynet::Tensor*>> ndEdfss;
@@ -61,11 +71,17 @@ struct Engine {
 
     std::vector<std::vector<FWDKernel> > fwd_kernelss;
     std::vector<std::vector<BWDKernel> > bwd_kernelss;
+    std::vector<std::vector<UPDKernel> > upd_kernelss;
 
     std::vector<Instruction> instructions;
-    // dynet::Trainer trainer; 
-    Allocator& allocator;
+    
+    
+    dynet::Trainer* trainer; 
+    std::unordered_set<void*> updated_params;
+
     Timer timer;
+    Allocator& allocator;
+    
 };
 
 } // namespace DAO 

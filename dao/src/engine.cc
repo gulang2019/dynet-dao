@@ -3,6 +3,9 @@
 #include <dynet/devices.h>
 #include <dynet/param-nodes.h>
 #include <dynet/globals.h>
+#include <dynet/weight-decay.h>
+
+
 #include <string>
 
 namespace DAO { 
@@ -11,7 +14,22 @@ using dynet::Node;
 using dynet::Tensor; 
 using dynet::VariableIndex;
 
-Engine::Engine(): allocator(dao_allocator) {}
+bool enabled = false;
+
+Engine::Engine(dynet::Trainer* trainer): allocator(dao_allocator), trainer(trainer) {
+    if (trainer) {
+        const auto & params = trainer->model->parameters_list();
+        const auto & lparams = trainer->model->lookup_parameters_list();
+
+        // Allocate if necessary
+        if(trainer->aux_allocated < params.size()) {
+            trainer->aux_allocated = trainer->alloc_impl();
+        }
+        if(trainer->aux_allocated_lookup < lparams.size()) {
+            trainer->aux_allocated_lookup = trainer->alloc_lookup_impl();
+        }
+    }
+}
 
 std::vector<float> Engine::as_vector(const dynet::Tensor& tensor) {
     return std::move(allocator.get_values((TensorUID)&tensor));
@@ -179,10 +197,14 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
     for (VariableIndex i : cg->parameter_nodes) {
         dynet::ParameterNode* pnode = static_cast<dynet::ParameterNode*>(cg->nodes[i]);
         DAO::Kernel kernel;
-        if (pnode->params.p) 
+        if (pnode->params.p) {
             kernel.set_inputs(ndEdfs[i]).set_outputs(&pnode->params.get_storage().g);
-        else 
+            updated_params.insert(pnode->params.p.get());
+        }
+        else {
             kernel.set_inputs(ndEdfs[i]).set_outputs(&pnode->lparams.get_storage().all_grads);
+            updated_params.insert(pnode->lparams.p.get());
+        }
         allocator.Register(std::move(kernel));
     }
     timer.stop("symbolic_backward");
@@ -236,6 +258,8 @@ void Engine::run() {
     fwd_kernelss.clear();
     bwd_kernelss.clear();
     allocator.free_intermidiates();
+
+    upd_kernelss.clear();
 }
 
 void Engine::report(std::ostream& o) {
@@ -333,5 +357,72 @@ void Engine::run_backward(Instruction& inst) {
     }
 }
 
-void Engine::run_update(Instruction&) {}
+void Engine::symbolic_update() {
+    instructions.push_back({Instruction::UPDATE, nullptr, 0, (unsigned)upd_kernelss.size()});
+    upd_kernelss.push_back({});
+    auto& upd_kernels = upd_kernelss.back();
+    bool old_enabled = enabled;
+    enabled = true;
+    const auto& params = trainer->model->parameters_list();
+    const auto& lparams = trainer->model->lookup_parameters_list();
+    const float gscale = trainer->clip_gradients();
+    for (size_t i = 0; i < params.size(); ++i) {
+        auto& param = params[i];
+        assert(param->updated);
+        if (updated_params.count(param.get())) {
+            trainer->update_params(gscale, i);
+            UPDKernel upd_kernel;
+            upd_kernel.gscale = gscale;
+            upd_kernel.values = allocator.get_last_kernel()._inputs;
+            upd_kernel.p = param;
+            upd_kernel.lp = nullptr;
+            upd_kernels.push_back(std::move(upd_kernel));            
+        }
+        else {
+            DAO_WARNING("param[%u] is not updated", i);
+        }
+    }
+    for (size_t i = 0; i < lparams.size(); ++i) {
+        auto& lparam = lparams[i];
+        assert(lparam->updated);
+        if (updated_params.count(lparam.get())) {
+            trainer->update_lookup_params(gscale, i);
+            UPDKernel upd_kernel;
+            upd_kernel.gscale = gscale;
+            upd_kernel.values = allocator.get_last_kernel()._inputs;
+            upd_kernel.lp = lparam;
+            upd_kernel.p = nullptr;
+            upd_kernels.push_back(std::move(upd_kernel));   
+        }
+        else {
+            DAO_WARNING("lparam[%u] is not updated", i);
+        }
+    }
+
+    ++trainer->updates;
+    ++trainer->updates_since_status; 
+
+    enabled = old_enabled;
+    // clear the updated params
+    updated_params.clear();
+}
+
+void Engine::run_update(Instruction& inst) {
+    DAO_ASSERT(inst.opcode == Instruction::UPDATE, "inst.opcode != Instruction::UPDATE");
+    auto& upd_kernels = upd_kernelss[inst.idx];
+    for (auto& upd_kernel: upd_kernels) {
+        allocator.prepare();
+        for (auto& value: upd_kernel.values) {
+            DAO_ASSERT(allocator.check_on_gpu(value), "value.v is nullptr");
+        }
+        trainer->update_rule(upd_kernel.gscale, upd_kernel.values);
+        if (upd_kernel.p) {
+            upd_kernel.p->clear();
+        } else {
+            upd_kernel.lp->clear();
+        }
+        allocator.complete();
+    }
+}
+
 } // namespace DAO

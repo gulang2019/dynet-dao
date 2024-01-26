@@ -12,7 +12,6 @@ void push(std::vector<dynet::Tensor*>& vec, const std::vector<const dynet::Tenso
     }
 }
 
-
 void push(std::vector<TensorUID>& vec, const std::vector<TensorUID>& to_push) {
     vec.insert(vec.end(), to_push.begin(), to_push.end());
 }
