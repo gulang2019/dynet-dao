@@ -49,12 +49,18 @@ Transformer Example
 ./build/examples/transformer-train -c models/iwslt-envi/config.txt --parameters models/iwslt-envi/en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu &>models/iwslt-envi/log.en-vi.transformer.h2_l2_u128_do010101010001_att1_ls00_pe1_ml150_ffrelu
 ```
 
-gpt2 Example
-```
+Example: fine-tune gpt2 with lora and skip rate 0.2
+```bash
+skip_r=0.2
 # cd <repo dir>
 mkdir -p models/gpt2-124M
-build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --reset-if-stuck --use-smaller-minibatch &> models/gpt2-124M/train.log
-build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --reset-if-stuck --use-smaller-minibatch --dao-profile 1
+cp /home/siyuanch/ssd/workspace_zelongg/dynet-dao/models/gpt2-124M/hparams.ini models/gpt2-124M
+# TODO: modify hparams.ini for epochs, bs and log frequency
+mkdir -p models/gpt2-124M-$skip_r  # prepare initial checkpoint
+echo "768 12 12 4 0 0.1 $skip_r 0 0 0.1 1 1024 1 1 0 models/gpt2-124M-$skip_r/model.params" > models/gpt2-124M-$skip_r/model.config
+cp /ssd1/siyuanch/workspace_zelongg/DAO/models/124M/dynet-model.params models/gpt2-124M-$skip_r/model.params
+# Add --train-percent 10 to below cmd for faster run
+./build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --model-path models/gpt2-124M-$skip_r --attn-lora-r 2 --attention-dropout-p $skip_r --ff-dropout-p 0 --reset-if-stuck --use-smaller-minibatch 2>&1 | tee models/gpt2-124M-$skip_r/train.log
 ```
 
 Run xor test 

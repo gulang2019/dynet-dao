@@ -4,6 +4,7 @@
 */
 #include <DAO/DAO.h> 
 #include "transformer-lm.h"
+#include "common.h"
 
 using namespace std;
 using namespace dynet;
@@ -26,6 +27,7 @@ using namespace transformer;
 using namespace boost::program_options;
 
 // hyper-paramaters for training
+unsigned PAD_TOKENS = 2; // <SOS> <EOS>
 unsigned MINIBATCH_SIZE = 1;
 
 bool DEBUGGING_FLAG = false;
@@ -43,6 +45,7 @@ unsigned NUM_RESETS = 1;
 bool SAMPLING_TRAINING = false;
 
 bool VERBOSE = false;
+MyTimer timer_g("+");
 
 // ---
 bool load_data(const variables_map& vm
@@ -50,11 +53,15 @@ bool load_data(const variables_map& vm
 	, dynet::Dict& d
 	, SentinelMarkers& sm);
 // ---
+bool load_data_gpt2(const variables_map& vm
+	, WordIdSentences& train_cor, WordIdSentences& devel_cor, WordIdSentences& test_cor
+	, const gpt_vocab& d);
+// ---
 
 // ---
 bool load_model_config(const std::string& model_cfg_file
 	, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_models
-	, dynet::Dict& d
+	, gpt_vocab& d
 	, const transformer::SentinelMarkers& sm);
 // ---
 
@@ -124,6 +131,8 @@ int main(int argc, char** argv) {
 		("num-units,u", value<unsigned>()->default_value(512), "n_embd; 512 by default")
 		("num-heads,h", value<unsigned>()->default_value(8), "use <num> for number of heads in multi-head attention mechanism; 4 by default")
 		("n-ff-units-factor", value<unsigned>()->default_value(4), "use <num> times of input dim for output dim in feed-forward layer; 4 by default")
+		("attn-lora-r", value<unsigned>()->default_value(0), "If non-zero, use lora for attention fine-tune and <num> is the rank of delta-W matrix; 0 by default")
+		("ff-lora-r", value<unsigned>()->default_value(0), "If non-zero, use lora for MLP fine-tune and <num> is the rank of delta-W matrix; 0 by default")
 		//-----------------------------------------
 		("emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for word embeddings; 0.1 by default")
 		("sublayer-dropout-p", value<float>()->default_value(0.1f), "attention dropout; 0.1 by default")
@@ -219,29 +228,33 @@ int main(int argc, char** argv) {
 		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
 	// model recipe
-	dynet::Dict d;// vocabularies
+	gpt_vocab d;
 	SentinelMarkers sm;// sentinel markers
-	WordIdSentences train_cor, devel_cor;// integer-converted train and dev data
+	WordIdSentences train_cor, devel_cor, test_cor;// integer-converted train and dev data
 	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
+	tfc._attn_lora_r = vm["attn-lora-r"].as<unsigned>();
+	tfc._ff_lora_r = vm["ff-lora-r"].as<unsigned>();
 
 	std::string config_file = model_path + "/model.config";// configuration file path
+
+	// load fixed vocabularies from files
+	std::string vocab_file = vm["vocab"].as<std::string>();
+	assert(vocab_file.find("encoder.json") != string::npos);
+	gpt_vocab_init(vocab_file, d);
+
+	auto n_vocab = d.id_to_token.size();
+	// TODO UNK
+	sm._kTGT_SOS = n_vocab;
+	sm._kTGT_EOS = n_vocab + 1;
+
 	if (stat(config_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode)){// check existence	
 		// (incremental training)
 		// to load the training profiles from previous training run
 		cerr << "Found existing (trained) model from " << model_path << "!" << endl;	
 
-		// load vocabulary from files
-		std::string vocab_file = model_path + "/" + "vocab";
-		load_vocab(vocab_file, d);
-
-		// initalise sentinel markers
-		sm._kTGT_SOS = d.convert("<s>");
-		sm._kTGT_EOS = d.convert("</s>");
-		sm._kTGT_UNK = d.convert("<unk>");
-
 		// load data files and config file for training
 		if (is_training){
-			if (!load_data(vm, train_cor, devel_cor, d, sm))
+			if (!load_data_gpt2(vm, train_cor, devel_cor, test_cor, d))
 				TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 			// model configuration
@@ -251,8 +264,7 @@ int main(int argc, char** argv) {
 			std::string line;
 			getline(inpf_cfg, line);
 			std::stringstream ss(line);
-			// TODO: check if the 4 tokens have been accounted for
-			tfc._tgt_vocab_size = d.size();
+			tfc._tgt_vocab_size = d.size() + PAD_TOKENS;
 			tfc._sm = sm;
 			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
 			   >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
@@ -266,15 +278,10 @@ int main(int argc, char** argv) {
 	else{// not exist, meaning that the model will be created from scratch!
 		cerr << "Preparing to train the model from scratch..." << endl;
 
-		// load fixed vocabularies from files if provided
-		load_vocab(vm["vocab"].as<std::string>(), d);
 
-		// sentinel markers
-		sm._kTGT_SOS = d.convert("<s>");
-		sm._kTGT_EOS = d.convert("</s>");
 
 		// load data files
-		if (!load_data(vm, train_cor, devel_cor, d, sm))
+		if (!load_data_gpt2(vm, train_cor, devel_cor, test_cor, d))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 		// transformer configuration
@@ -300,15 +307,11 @@ int main(int argc, char** argv) {
 			, false
 			, vm.count("use-hybrid-model"));
 
-		// save vocabularies to files
-		std::string vocab_file = model_path + "/" + "vocab";
-		save_vocab(vocab_file, d);
-
 		// save configuration file (for decoding/inference)
 		std::string config_out_file = model_path + "/model.config";
 		std::string params_out_file = model_path + "/model.params";
 		save_config(config_out_file, params_out_file, tfc);		
-	}		
+	}
 
 	if (is_training){
 		// learning rate scheduler
@@ -325,6 +328,12 @@ int main(int argc, char** argv) {
 			tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
 		}
 		cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
+		size_t lora_count = 0;
+		for (const auto param : tf.get_model_parameters().parameters_list()) {
+			if (param->name.find("lora.") != string::npos)
+				lora_count += param->size();
+		}
+		cerr << endl << "Count of LoRA parameters: " << lora_count << '\n';
 
 		// create SGD trainer
 		Trainer* p_sgd_trainer = create_sgd_trainer(vm, tf.get_model_parameters());
@@ -350,9 +359,6 @@ int main(int argc, char** argv) {
 		if (!load_model_config(config_file, v_tf_models, d, sm))
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load model(s)!");
 		
-		cerr << "Reading testing data from " << vm["test"].as<std::string>() << "..." << endl;
-		WordIdSentences test_cor = read_corpus(vm["test"].as<std::string>(), &d, false/*for development*/, 0, vm.count("r2l_target"));
-
 		report_perplexity_score(v_tf_models, test_cor, MINIBATCH_SIZE);
 	}
 
@@ -361,57 +367,76 @@ int main(int argc, char** argv) {
 //************************************************************************************************************************************************************
 
 // ---
-bool load_data(const variables_map& vm
-	, WordIdSentences& train_cor, WordIdSentences& devel_cor
-	, dynet::Dict& d
-	, SentinelMarkers& sm)
+// load InstructionTuningDataset
+bool load_data_gpt2(const variables_map& vm
+	, WordIdSentences& train_cor, WordIdSentences& devel_cor, WordIdSentences& test_cor
+	, const gpt_vocab& d)
 {
-	bool r2l_target = vm.count("r2l_target");
+	//! Actually contains whole dataset
+	std::string train_path = vm["train"].as<std::vector<std::string>>()[0];
+	assert(train_path.find("alpaca_gpt4_data.json") != string::npos);
+	cerr << endl << "Reading training data from " << train_path << "...\n";
 
-	std::vector<std::string> train_paths = vm["train"].as<std::vector<std::string>>();// to handle multiple training data
-	if (train_paths.size() > 2) TRANSFORMER_RUNTIME_ASSERT("Invalid -t or --train parameter. Only maximum 2 training corpora provided!");	
-	cerr << endl << "Reading training data from " << train_paths[0] << "...\n";
-	if (vm.count("shared-embeddings"))
-		train_cor = read_corpus(train_paths[0], &d, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
-	else
-		train_cor = read_corpus(train_paths[0], &d, true, vm["max-seq-len"].as<unsigned>(), r2l_target);
-	if ("" == vm["vocab"].as<std::string>()) // if not using external vocabularies
-		d.freeze(); // no new word types allowed
-	
-	if (train_paths.size() == 2)// incremental training
-	{
-		train_cor.clear();// use the next training corpus instead!	
-		cerr << "Reading extra training data from " << train_paths[1] << "...\n";
-		train_cor = read_corpus(train_paths[1], &d, true/*for training*/, vm["max-seq-len"].as<unsigned>(), r2l_target);
-		cerr << "Performing incremental training..." << endl;
+	// read file into string
+	std::ifstream ifs(train_path);
+	std::string json = std::string((std::istreambuf_iterator<char>(ifs)),
+     		(std::istreambuf_iterator<char>()));
+	// deser
+	auto raw_data = parseDictsJson(json);
+	auto ds_size = raw_data.size();
+	// encode as List[sentence]
+	vector<string> raw_sents;
+	for (const auto &data_point: raw_data) {
+		ostringstream oss;
+		oss << "instruction " << data_point.at("instruction") << "\n\ninput " << data_point.at("input") << "\n\noutput " << data_point.at("output") << "\n\n";
+		raw_sents.push_back(oss.str());
 	}
+
+	// train/test split
+    size_t train_size = ds_size * 4 / 5;
+    size_t val_size = ds_size / 10;
+    size_t test_size = ds_size - train_size - val_size;
+	auto val_begin = train_size;
+	auto val_end = val_begin + val_size;
 
 	// limit the percent of training data to be used
 	unsigned train_percent = vm["train-percent"].as<unsigned>();
-	if (train_percent < 100 
-		&& train_percent > 0)
-	{
-		cerr << "Only use " << train_percent << "% of " << train_cor.size() << " training instances: ";
-		unsigned int rev_pos = train_percent * train_cor.size() / 100;
-		train_cor.erase(train_cor.begin() + rev_pos, train_cor.end());
-		cerr << train_cor.size() << " instances remaining!" << endl;
-	}
-	else if (train_percent != 100){
+	if (train_percent < 100 && train_percent > 0) {
+		cerr << "Only use " << train_percent << "% of " << train_size << " training instances: ";
+		train_size = train_size * train_percent / 100;
+		cerr << train_size << " instances remaining!" << endl;
+	} else if (train_percent != 100){
 		cerr << "Invalid --train-percent <num> used. <num> must be (0,100]" << endl;
 		return false;
 	}
 
+	// Tokenize. Deferred here because it's slow
+	int lc = 0, toks = 0;
+	unsigned int max_len = 0;
+	unsigned max_slen = vm["max-seq-len"].as<unsigned>();
+
+	for (int i=0, e=raw_sents.size(); i<e; ++i) {
+		if (i>=train_size && i<val_begin) continue;
+		const auto& raw_sent = raw_sents[i];
+		WordIdSentence sent = gpt_tokenize(d, raw_sent);
+		if (max_slen > 0 && sent.size() > max_slen) continue;
+		// int sos_id = d.special_tokens[0], eos_id = d.special_tokens[1];
+		if (sent.size() < 1) continue;
+
+		if (i<train_size) train_cor.push_back(sent);
+		else if (i<val_end) devel_cor.push_back(sent);
+		else test_cor.push_back(sent);
+
+		max_len = std::max(max_len, (unsigned int)sent.size());
+		toks += sent.size();
+		++lc;
+	}
+	cerr << lc << " lines, " << toks << " tokens, " << "max length: " << max_len << ", " << d.size() << " types" << endl;
+
 	if (DREPORT >= train_cor.size())
 		cerr << "WARNING: --dreport <num> (" << DREPORT << ")" << " is too large, <= training data size (" << train_cor.size() << ")" << endl;
 
-	// set up <unk> ids
-	d.set_unk("<unk>");
-	sm._kTGT_UNK = d.get_unk_id();
-
-	if (vm.count("devel")) {
-		cerr << "Reading dev data from " << vm["devel"].as<std::string>() << "...\n";
-		devel_cor = read_corpus(vm["devel"].as<std::string>(), &d, false/*for development*/, 0, r2l_target);
-	}
+	// TODO set up <unk> ids
 
 	return true;
 }
@@ -448,7 +473,7 @@ dynet::Trainer* create_sgd_trainer(const variables_map& vm, dynet::ParameterColl
 // ---
 bool load_model_config(const std::string& model_cfg_file
 	, std::vector<std::shared_ptr<transformer::TransformerLModel>>& v_models
-	, dynet::Dict& d
+	, gpt_vocab& d
 	, const transformer::SentinelMarkers& sm)
 {
 	cerr << "Loading model(s) from configuration file: " << model_cfg_file << "..." << endl;
@@ -474,7 +499,7 @@ bool load_model_config(const std::string& model_cfg_file
 		transformer::TransformerConfig tfc;
 		std::string model_file;
 
-		tfc._tgt_vocab_size = d.size();
+		tfc._tgt_vocab_size = d.size() + PAD_TOKENS;
 		tfc._sm = sm;
 		
 		ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
@@ -590,7 +615,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	const transformer::TransformerConfig& tfc = tf.get_config();
 
 	// get current dict
-	dynet::Dict& dict = tf.get_dict();
+	auto& dict = tf.get_dict();
 
 	// create minibatches
 	std::vector<WordIdSentences> train_cor_minibatch, dev_cor_minibatch;
@@ -696,25 +721,23 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 				float elapsed = timer_iteration.elapsed();
 
 				p_sgd->status();
+				cerr << "t=" << timer_g.elapsed()/1000 << "s ";
 				cerr << "sents=" << sid << " ";
-				cerr /*<< "loss=" << tstats._scores[1]*/ << "words=" << tstats._words_tgt << " unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';//<< " E=" << (tstats._scores[1] / tstats._words_tgt) << " ppl=" << exp(tstats._scores[1] / tstats._words_tgt) << ' ';
-				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;  					
+				cerr /*<< "loss=" << tstats._scores[1]*/ << "words=" << tstats._words_tgt << " unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';
+				cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;
+				
+				timer_iteration.reset();
+				tstats = ModelStats();
 			}
 			   		 
 			++id;
 		}
-		goto finish;
+		// goto finish; // TODO remove before production
 		// show score on dev data?
 		tf.set_dropout(false);// disable dropout for evaluating dev data
 
 		// sample a random sentence (for observing translations during training progress)
-		if (SAMPLING_TRAINING){// Note: this will slow down the training process, suitable for debugging only.
-			dynet::ComputationGraph cg;
-			WordIdSentence target;
-			cerr << endl << "---------------------------------------------------------------------------------------------------" << endl;	
-			tf.sample(cg, target/*, prefix if possible*/);		
-			cerr << "***Random sample: " << get_sentence(target, dict) << endl;// can do sampling with any prefix
-		}
+		assert((SAMPLING_TRAINING == false) && "Not implemented");
 
 		timer_iteration.reset();
 
@@ -745,7 +768,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		}
 		
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
-		cerr << "***DEV [epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
+		cerr << "***DEV [" << "t=" << timer_g.elapsed()/1000 << "s" << " epoch=" << (float)epoch + (float)sid/(float)train_cor.size() << " eta=" << p_sgd->learning_rate << "]" << " sents=" << devel_cor.size( )<< " words=" << dstats._words_tgt << " unks=" << dstats._words_tgt_unk << " " << dstats.get_score_string() << ' ';
 		if (cpt > 0) cerr << "(not improved, best ppl on dev so far: " << dstats.get_score_string(false)  << ") ";
 		cerr << "[completed in " << elapsed << " ms]" << endl;
 	
@@ -809,7 +832,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	}
 finish:
 	cerr << endl << "Transformer training completed!" << endl;
-	DAO::profiler.dump(model_path + "/train");
+	// DAO::profiler.dump(model_path + "/train");
 }
 // ---
 

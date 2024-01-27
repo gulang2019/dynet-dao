@@ -6,6 +6,7 @@
 #pragma once
 
 // DyNet
+#include "dynet/io.h"
 #include "dynet/globals.h"
 #include "dynet/nodes.h"
 #include "dynet/param-init.h"
@@ -29,6 +30,7 @@
 #include <boost/range/irange.hpp>
 
 // All utilities
+#include "common.h"
 #include "utils.h"
 
 // Layers
@@ -41,25 +43,34 @@ namespace transformer {
 
 //--- LM Decoder Layer
 struct LMDecoderLayer{
-	explicit LMDecoderLayer(DyNetModel* mod, TransformerConfig& tfc)
-		:_self_attention_sublayer(mod, tfc, true)
-		, _feed_forward_sublayer(mod, tfc)
-	{	
+	explicit LMDecoderLayer(DyNetModel& mod, TransformerConfig& tfc, int layer_idx)
+		: _layer_idx(layer_idx)
+		, _mod_attn(mod.add_subcollection("attn"))
+		, _self_attention_sublayer(_mod_attn, tfc, true)
+		, _mod_mlp(mod.add_subcollection("mlp"))
+		, _feed_forward_sublayer(_mod_mlp, tfc)
+	{
+		auto mod_ln1 = mod.add_subcollection("ln-1");
+		auto mod_ln2 = mod.add_subcollection("ln-2");
 		// initialisation for layer normalisation
-		_p_ln1_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
-		_p_ln1_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
-		_p_ln2_g = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f));
-		_p_ln2_b = mod->add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f));
+		_p_ln1_b = mod_ln1.add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f), "b");
+		_p_ln1_g = mod_ln1.add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f), "g");
+		_p_ln2_b = mod_ln2.add_parameters({tfc._num_units}, dynet::ParameterInitConst(0.f), "b");
+		_p_ln2_g = mod_ln2.add_parameters({tfc._num_units}, dynet::ParameterInitConst(1.f), "g");
 
 		_p_tfc = &tfc;
 	}
 
 	~LMDecoderLayer(){}	
 
+	int _layer_idx;
+
 	// multi-head attention sub-layers
+	DyNetModel _mod_attn;
 	MultiHeadAttentionLayer _self_attention_sublayer;// self-attention
 
 	// position-wise feed forward sub-layer
+	DyNetModel _mod_mlp;
 	FeedForwardLayer _feed_forward_sublayer;
 
 	// for layer normalisation
@@ -84,38 +95,42 @@ struct LMDecoderLayer{
 		// stoch depth
 		dynet::Expression i_mh_self_att = i_decl;
 		if (_p_tfc->_use_dropout) { // training
-			if (rand01() > _p_tfc->_attention_dropout_rate) {
+			float attn_skip_prob = _p_tfc->_attention_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1);
+			if (rand01() > attn_skip_prob) {
 				// layer normalisation 1 (prenorm)
 				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 				// multi-head self attention sub-layer
 				i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
 				// element-wise dropout applied within attn sublayer
-			}
-			i_mh_self_att = i_mh_self_att / (1-_p_tfc->_attention_dropout_rate);
+
+				i_mh_self_att = i_mh_self_att / (1-attn_skip_prob);
+				i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)		
+			} // else skipped, residual=0
 		} else { // inference
 			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 			i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
-		}
 
-		// w/ residual connection
-		i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)		
+			i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)		
+		}
 
 		dynet::Expression i_ff = i_decl;
 		if (_p_tfc->_use_dropout) { // training
-			if (rand01() > _p_tfc->_ff_dropout_rate) {
+			float ff_skip_prob = _p_tfc->_ff_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1);
+			if (rand01() > ff_skip_prob) {
 				// layer normalisation 3 (prenorm)
 				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 				// position-wise feed-forward sub-layer
 				i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
-			}
-			i_ff = i_ff / (1-_p_tfc->_ff_dropout_rate);
+
+				i_ff = i_ff / (1-ff_skip_prob);
+				i_decl = i_decl + i_ff;
+			} // else skipped, residual=0
 		} else { // inference
 			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 			i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
-		}
 
-		// w/ residual connection
-		i_decl = i_decl + i_ff;
+			i_decl = i_decl + i_ff;
+		}
 
 		return i_decl;
 	}
@@ -124,14 +139,16 @@ struct LMDecoderLayer{
 struct LMDecoder{
 	explicit LMDecoder(DyNetModel* mod, TransformerConfig& tfc)
 	{
-		_p_embed_t = mod->add_lookup_parameters(tfc._tgt_vocab_size, {tfc._num_units});
-
 		if (!tfc._use_hybrid_model && tfc._position_encoding == 1){
-			_p_embed_pos = mod->add_lookup_parameters(tfc._max_length, {tfc._num_units});
+			_p_embed_pos = mod->add_lookup_parameters(tfc._max_length, {tfc._num_units}, "wpe");
 		}
 
+		_p_embed_t = mod->add_lookup_parameters(tfc._tgt_vocab_size, {tfc._num_units}, "wte");
+
 		for (unsigned l = 0; l < tfc._nlayers; l++){
-			_v_dec_layers.push_back(LMDecoderLayer(mod, tfc));
+			auto mod_layer = mod->add_subcollection("blocks." + to_string(l));
+			_v_dec_layers.push_back(LMDecoderLayer(mod_layer, tfc, l));
+			_mod_layers.push_back(mod_layer);
 		}
 
 		if (tfc._use_hybrid_model){
@@ -151,6 +168,7 @@ struct LMDecoder{
 	// hybrid architecture: use LSTM-based RNN over word embeddings instead of word embeddings + positional encodings
 	std::shared_ptr<dynet::LSTMBuilder> _p_tgt_rnn;
 
+	std::vector<DyNetModel> _mod_layers;
 	std::vector<LMDecoderLayer> _v_dec_layers;// stack of identical decoder layers
 
 	// transformer config pointer
@@ -170,6 +188,7 @@ struct LMDecoder{
 	dynet::Expression compute_embeddings_and_masks(dynet::ComputationGraph &cg
 		, const WordIdSentences& sents/*batch of target sentences*/)
 	{
+		bool freeze_embedding = !!_p_tfc->_attn_lora_r;
 		// compute embeddings			
 		// get max length in a batch
 		size_t max_len = sents[0].size();
@@ -218,6 +237,7 @@ struct LMDecoder{
 					}
 				}
 
+				// auto tgt_emb = freeze_embedding ? dynet::const_lookup(cg, _p_embed_t, words) : dynet::lookup(cg, _p_embed_t, words);
 				target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));
 			}
 			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
@@ -236,7 +256,9 @@ struct LMDecoder{
 							positions[bs] = l;
 				}
 
-					pos_embeddings.push_back(dynet::lookup(cg, _p_embed_pos, positions));
+					auto pos_emb = freeze_embedding ? 
+							dynet::const_lookup(cg, _p_embed_pos, positions) : dynet::lookup(cg, _p_embed_pos, positions);
+					pos_embeddings.push_back(pos_emb);
 				}
 				dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
 
@@ -390,7 +412,7 @@ typedef std::shared_ptr<LMDecoder> LMDecoderPointer;
 struct TransformerLModel {
 
 public:
-	explicit TransformerLModel(const TransformerConfig& tfc, dynet::Dict& d);
+	explicit TransformerLModel(const TransformerConfig& tfc, gpt_vocab& d);
 
 	explicit TransformerLModel();
 
@@ -425,7 +447,7 @@ public:
 
 	void set_dropout(bool is_activated = true);
 
-	dynet::Dict& get_dict();
+	gpt_vocab& get_dict();
 
 	TransformerConfig& get_config();
 
@@ -435,7 +457,7 @@ protected:
 
 	LMDecoderPointer _decoder;// lm decoder
 
-	dynet::Dict _dict;// vocabulary
+	gpt_vocab _dict;// vocabulary
 
 	dynet::Parameter _p_lnf_g, _p_lnf_b;// final layer normalisation
 
@@ -447,16 +469,17 @@ TransformerLModel::TransformerLModel(){
 	_decoder = nullptr;
 }
 
-TransformerLModel::TransformerLModel(const TransformerConfig& tfc, dynet::Dict& d)
+TransformerLModel::TransformerLModel(const TransformerConfig& tfc, gpt_vocab& d)
 : _tfc(tfc)
 {
 	_all_params.reset(new DyNetModel());// create new model parameter object
 
 	_decoder.reset(new LMDecoder(_all_params.get(), _tfc));// create new decoder object
 
+	auto mod_lnf = _all_params.get()->add_subcollection("ln-f");
 	// final LayerNorm
-	_p_lnf_g = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(1.f));
-	_p_lnf_b = _all_params.get()->add_parameters({_tfc._num_units}, dynet::ParameterInitConst(0.f));
+	_p_lnf_b = mod_lnf.add_parameters({_tfc._num_units}, dynet::ParameterInitConst(0.f), "b");
+	_p_lnf_g = mod_lnf.add_parameters({_tfc._num_units}, dynet::ParameterInitConst(1.f), "g");
 
 	// dictionaries
 	_dict = d;
@@ -677,7 +700,8 @@ void TransformerLModel::sample(dynet::ComputationGraph& cg, WordIdSentence &targ
 	target.push_back(sos_sym); 
 
 	std::vector<std::string> pwords = split_words(prefix);
-	for (auto& word : pwords) target.push_back(_dict.convert(word));
+	assert(false && "Not implemented");
+	// for (auto& word : pwords) target.push_back(_dict.convert(word));
 
 	std::vector<dynet::Expression> aligns;// FIXME: unused
 	std::stringstream ss;
@@ -720,14 +744,24 @@ void TransformerLModel::initialise_params_from_file(const std::string &params_fi
 
 void TransformerLModel::save_params_to_file(const std::string &params_file)
 {
-	dynet::save_dynet_model(params_file, _all_params.get());// FIXME: use binary streaming instead for saving disk spaces?
+	auto model =  _all_params.get();
+	const auto &storage = model->get_storage();
+	TextFileSaver saver(params_file);
+	// filter out lora params
+    for (auto & p : storage.params) {
+		// if (p->name.find("lora.") != string::npos) continue;
+		saver.save(*p, "/model" + p->name);
+	}
+    for (auto & p : storage.lookup_params) {
+		saver.save(*p, "/model" + p->name);
+	}
 }
 
 void TransformerLModel::set_dropout(bool is_activated){
 	_tfc._use_dropout = is_activated;
 }
 
-dynet::Dict& TransformerLModel::get_dict()
+gpt_vocab& TransformerLModel::get_dict()
 {
 	return _dict;
 }
