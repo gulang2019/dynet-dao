@@ -181,8 +181,10 @@ void LookupParameterStorage::clear() {
   if (all_grads.device->type == DeviceType::GPU || all_updated) {
     TensorTools::zero(all_grads);
   } else {
-    for (auto i : non_zero_grads)
+    for (auto i : non_zero_grads){
+      grads[i].v = all_grads.v + dim.size() * i;
       TensorTools::zero(grads[i]);
+    }
   }
   non_zero_grads.clear();
   all_updated = false;
@@ -707,6 +709,7 @@ void LookupParameterStorage::accumulate_grad(const Tensor& d) {
 template <class MyDevice>
 void LookupParameterStorage::accumulate_grad_dev(MyDevice & dev, unsigned index, const Tensor& d) {
   non_zero_grads.insert(index);
+  grads[index].v = all_grads.v + dim.size() * index;
   tvec(grads[index]).device(*dev.edevice) += tvec(d);
 }
 #ifdef __CUDACC__

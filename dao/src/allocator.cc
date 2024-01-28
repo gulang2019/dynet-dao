@@ -12,7 +12,7 @@
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
         fprintf(stderr, "CUDA error at %s %d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        exit(EXIT_FAILURE); \
+        assert(false); \
     } \
 } while (0)
 
@@ -80,7 +80,7 @@ void Allocator::init(
     CUDA_CHECK(cudaStreamCreate(&H2D_stream));
     CUDA_CHECK(cudaStreamCreate(&D2H_stream));
 
-    DAO_INFO_LEVEL(1, "Init GPU device %d, Mem %ld MB, CPU %ld MB, Compute %p, H2D %p, D2H %p", DAO::default_device_id, (gpu_init_size >> 20), (cpu_init_size >> 20),  compute_stream, H2D_stream, D2H_stream);
+    DAO_INFO_LEVEL(0, "Init GPU device %d, Mem %ld MB, CPU %ld MB, Compute %p, H2D %p, D2H %p", DAO::default_device_id, (gpu_init_size >> 20), (cpu_init_size >> 20),  compute_stream, H2D_stream, D2H_stream);
 }
 
 
@@ -203,6 +203,7 @@ void Allocator::prepare() {
 
 
 void Allocator::complete() {
+    CUDA_CHECK(cudaDeviceSynchronize());
     timer.start("complete");
     assert(gpu_manager->check_MemStorage());
     assert(cpu_manager->check_MemStorage());
@@ -271,9 +272,13 @@ Allocator::~Allocator() {
 
 void TensorRecord::display(std::ostream& o, bool display_block) const {
     o << "<";
-    o << "ID: " << ((size_t)tensor_id & 0xfff) << ",";
+    o << "ID: " << ((size_t)tensor_id & 0xfff) << ", ";
     std::string status_tag = status == ONCPU ? "CPU" : (status == ONGPU ? "GPU" : "UND");
-    o << "S: " << status_tag << ",";
+    o << status_tag << ",";
+    o << "N: " << tensor_size << ", ";
+    if (block_ptr) {
+        o << "P: " << block_ptr->physical_location_start << ",";
+    }
     assert(status == UNINITIALIZED || block_ptr != nullptr);
     if (display_block){
         if (block_ptr) {
@@ -281,8 +286,8 @@ void TensorRecord::display(std::ostream& o, bool display_block) const {
             block_ptr->display(o);
         }
     }
-    size_t na = access_pattern.empty()? -1: access_pattern.front();
-    o << "A: " << na << ",";
+    // size_t na = access_pattern.empty()? -1: access_pattern.front();
+    // o << "A: " << na << ",";
     o << ">,";
 }
 
@@ -314,7 +319,8 @@ void Allocator::free(TensorUID tensor_id) {
     global_memory_record->delete_tensor(tensor_id);
 }
 
-void Allocator::free_intermidiates() {
+void Allocator::reset() {
+    // free all allocated tensors; 
     std::unordered_set<TensorUID> tensor_ids;
     for (auto& pair: global_memory_record->get_table()) {
         if (pair.second.record_type == TensorRecord::INTERMIDIATE) {
@@ -325,6 +331,13 @@ void Allocator::free_intermidiates() {
         free(tensor_id);
     }
     freed_tensors.clear();
+    // clear up 
+    assert(registered_time == all_accesses.size());
+    DAO_COND_WARNING(logical_time != all_accesses.size(), "not all kernels are executed");
+    logical_time = 0;
+    registered_time = 0;
+    all_accesses.clear();
+    zero_init_tensors.clear();
 }
 
 std::vector<float> Allocator::get_values(TensorUID tensor_id) {

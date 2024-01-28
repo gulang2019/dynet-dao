@@ -163,7 +163,7 @@ const Tensor& SimpleExecutionEngine::incremental_forward(VariableIndex i) {
           ss << x->v;
           input_ptrs.push_back(ss.str());
         }
-        DAO_INFO_LEVEL(1, "DyNet FWD %p = %s", node_fx.v, node->as_string(input_ptrs).c_str());
+        DAO_INFO_LEVEL(2, "DyNet FWD %p = %s", node_fx.v, node->as_string(input_ptrs).c_str());
         node->forward(xs, node_fx);
 #ifdef USE_DAO 
         if(DAO::profile_enabled){
@@ -293,7 +293,7 @@ void SimpleExecutionEngine::backward(VariableIndex from_where, bool full) {
             DAO::profiler.start();
           }
 #endif 
-          DAO_INFO_LEVEL(1, "DyNet BWD %u %p = %s", ai, node_dEdxai.v, node->as_dummy_string().c_str());
+          DAO_INFO_LEVEL(2, "DyNet BWD %u %p = %s", ai, node_dEdxai.v, node->as_dummy_string().c_str());
           node->backward(xs, node_fx, node_dEdfx, ai, node_dEdxai);
 #ifdef USE_DAO
           if(DAO::profile_enabled){

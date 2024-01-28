@@ -38,6 +38,7 @@ extern cudaStream_t default_stream;
 extern int default_device_id;
 extern bool debug_mode;
 extern bool enabled; // whether to do the symbolic update;
+extern bool use_dao; // whether DAO is enabled for memory allocation;
 
 #define PRINT_MSG(...) do{printf(ANSI_COLOR_MAGENTA "%s:%d,%d " ANSI_COLOR_RESET, __FILE__, __LINE__,gettid()); printf(__VA_ARGS__); printf("\n");}while(0)
 #define DAO_INFO(...) do{ if (DAO::verbose) { printf(ANSI_COLOR_GREEN "[DAO::INFO]:\t" ANSI_COLOR_RESET); PRINT_MSG(__VA_ARGS__); }} while(0)

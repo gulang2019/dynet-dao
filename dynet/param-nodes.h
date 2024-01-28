@@ -8,13 +8,18 @@
 namespace dynet {
 
 struct ParameterNodeBase : public Node {
+  enum type_t{
+    PARAM, 
+    LOOKUP
+  }type; 
+  explicit ParameterNodeBase(type_t type) : type(type) {}
   virtual void accumulate_grad(const Tensor& g) = 0;
 };
 
 // represents optimizable parameters
 struct ParameterNode : public ParameterNodeBase {
-  explicit ParameterNode(const Parameter & p) : dim(p.get_storage().dim), params(p) {}
-  explicit ParameterNode(const LookupParameter & lp) : dim(lp.get_storage().all_dim), lparams(lp) {}
+  explicit ParameterNode(const Parameter & p) : ParameterNodeBase(ParameterNodeBase::PARAM), dim(p.get_storage().dim), params(p) {}
+  explicit ParameterNode(const LookupParameter & lp) : ParameterNodeBase(ParameterNodeBase::PARAM), dim(lp.get_storage().all_dim), lparams(lp) {}
   DYNET_NODE_DEFINE_DEV_IMPL()
   void accumulate_grad(const Tensor& g) override;
   Dim dim;
@@ -82,10 +87,10 @@ struct ScalarInputNode : public Node {
 
 // represents a matrix/vector embedding of an item of a discrete set (1-hot coding)
 struct LookupNode : public ParameterNodeBase {
-  LookupNode(LookupParameter p, unsigned ind) : dim(p.get_storage().dim), index(ind), pindex(&index), indices(), pindices(), params(p) {}
-  LookupNode(LookupParameter p, const unsigned* pind) : dim(p.get_storage().dim), index(), pindex(pind), indices(), pindices(), params(p) {}
-  LookupNode(LookupParameter p, const std::vector<unsigned>& indices) : dim(p.get_storage().dim), index(), pindex(), indices(indices), pindices(&this->indices), params(p) { dim.bd = pindices->size(); }
-  LookupNode(LookupParameter p, const std::vector<unsigned>* pindices) : dim(p.get_storage().dim), index(), pindex(), indices(), pindices(pindices), params(p) { dim.bd = pindices->size(); }
+  LookupNode(LookupParameter p, unsigned ind) : ParameterNodeBase(ParameterNodeBase::LOOKUP), dim(p.get_storage().dim), index(ind), pindex(&index), indices(), pindices(), params(p) {}
+  LookupNode(LookupParameter p, const unsigned* pind) : ParameterNodeBase(ParameterNodeBase::LOOKUP), dim(p.get_storage().dim), index(), pindex(pind), indices(), pindices(), params(p) {assert(!"current implementation doesn't support pointer input");}
+  LookupNode(LookupParameter p, const std::vector<unsigned>& indices) : ParameterNodeBase(ParameterNodeBase::LOOKUP), dim(p.get_storage().dim), index(), pindex(), indices(indices), pindices(&this->indices), params(p) { dim.bd = pindices->size(); }
+  LookupNode(LookupParameter p, const std::vector<unsigned>* pindices) : ParameterNodeBase(ParameterNodeBase::LOOKUP), dim(p.get_storage().dim), index(), pindex(), indices(), pindices(pindices), params(p) {assert(!"current implementation doesn't support pointer input"); dim.bd = pindices->size(); }
   DYNET_NODE_DEFINE_DEV_IMPL()
   virtual bool supports_multibatch() const override { return true; }  
   virtual int autobatch_sig(const ComputationGraph &cg, SigMap &sm) const override;

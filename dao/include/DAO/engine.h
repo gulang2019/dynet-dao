@@ -13,7 +13,7 @@
 
 namespace DAO {
 
-void initialize(int argc, char** argv);
+void initialize();
 
 struct Instruction{
     enum opcode_t{ 
@@ -34,6 +34,8 @@ struct Engine {
     void symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg, 
             const dynet::Expression& expr); 
     void symbolic_update();
+
+    bool sanity_check();
 
     void run();
     void run_forward(Instruction& inst);
@@ -63,18 +65,26 @@ struct Engine {
         std::shared_ptr<dynet::LookupParameterStorage> lp;
     };
 
+    struct ACC_GRADKernel {
+        dynet::ParameterNodeBase* pnode;
+        dynet::Tensor* ndEdf;
+        dynet::Tensor* grads;
+        dynet::Tensor* tmp = nullptr;
+    };
+
     std::vector<std::vector<dynet::Tensor*>> nfxss;
     std::vector<std::vector<dynet::Tensor*>> fwdtmpss; 
     std::vector<std::vector<dynet::Tensor*>> ndEdfss;
 
+    // the outputs of all forward pass; we would keep it until the next run happens
     std::unordered_set<dynet::Tensor*> outputs;
 
     std::vector<std::vector<FWDKernel> > fwd_kernelss;
     std::vector<std::vector<BWDKernel> > bwd_kernelss;
     std::vector<std::vector<UPDKernel> > upd_kernelss;
+    std::vector<std::vector<ACC_GRADKernel>> acc_kernelss;
 
     std::vector<Instruction> instructions;
-    
     
     dynet::Trainer* trainer; 
     std::unordered_set<void*> updated_params;

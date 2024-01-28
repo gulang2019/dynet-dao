@@ -35,6 +35,23 @@ std::vector<float> Engine::as_vector(const dynet::Tensor& tensor) {
     return std::move(allocator.get_values((TensorUID)&tensor));
 }
 
+bool Engine::sanity_check() {
+    size_t n_kernels = 0;
+    for (auto& fwd_kernelss: fwd_kernelss) {
+        n_kernels += fwd_kernelss.size();
+    }
+    for (auto& bwd_kernelss: bwd_kernelss) {
+        n_kernels += bwd_kernelss.size();
+    }
+    for (auto& upd_kernelss: upd_kernelss) {
+        n_kernels += upd_kernelss.size();
+    }
+    for (auto& acc_kernels: acc_kernelss) {
+        n_kernels += acc_kernels.size();
+    }
+    return n_kernels == allocator.all_accesses.size();
+}
+
 const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> cg, 
             const dynet::Expression& expr) {
     timer.start("symbolic_forward");
@@ -51,6 +68,7 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
     dynet::VariableIndex param_idx = 0;
     for (dynet::VariableIndex num_nodes_evaluated = 0; 
         num_nodes_evaluated <= expr.i; ++num_nodes_evaluated) {
+        DAO_INFO_LEVEL(2, "Symbolic FWD %u %s", num_nodes_evaluated, cg->nodes[num_nodes_evaluated]->as_dummy_string().c_str());
         const Node* node = cg->nodes[num_nodes_evaluated];
         if (node->forward_inplaced()) continue;
         std::vector<dynet::VariableIndex> xs_idx;
@@ -75,7 +93,7 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
         fwd_kernel.fx_idx = num_nodes_evaluated;
         fwd_kernel.xs_idx = std::move(xs_idx);
         fwd_kernel.tmp_idx = (dynet::VariableIndex)(-1);
-        if (node->aux_mem) {
+        if (node->aux_storage_size()) {
             fwdtmps.push_back(new dynet::Tensor());
             fwdtmps.back()->d = dynet::Dim({(unsigned)(node->aux_storage_size() / sizeof(float) + 1)});
             fwd_kernel.tmp_idx = fwdtmps.size() - 1;
@@ -88,10 +106,20 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
         kernel.set_inputs(xs).set_outputs(node_fx);
         if (param_idx < cg->parameter_nodes.size()
         && cg->parameter_nodes[param_idx] == num_nodes_evaluated) {
-            auto param_node = static_cast<const dynet::ParameterNode*>(node);
-            if(param_node->params.p) // Parameter
-                kernel.set_inputs(&param_node->params.get_storage().values);
-            else kernel.set_inputs(&param_node->lparams.get_storage().all_values);
+            auto param_base = static_cast<const dynet::ParameterNodeBase*>(node);
+            if (param_base->type == dynet::ParameterNodeBase::PARAM) {
+                auto param_node = static_cast<const dynet::ParameterNode*>(node);
+                DAO_ASSERT((param_node->params.p == nullptr)^(param_node->lparams.p == nullptr), "param_node->params.p == nullptr)^(param_node->lparams == nullptr)");
+                if(param_node->params.p != nullptr) // Parameter
+                    kernel.set_inputs(&param_node->params.get_storage().values);
+                else kernel.set_inputs(&param_node->lparams.get_storage().all_values);
+            }
+            else if (param_base->type == dynet::ParameterNodeBase::LOOKUP){
+                auto lookup_node = static_cast<const dynet::LookupNode*>(node);
+                DAO_ASSERT(lookup_node->params.p != nullptr, "lookup_node->params.p == nullptr");
+                kernel.set_inputs(&lookup_node->params.get_storage().all_values);
+            }
+            else {DAO_ERROR("Unknown ParameterNodeBase type");}
             param_idx++;
         }
         allocator.Register(std::move(kernel));
@@ -99,6 +127,7 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
     }
     allocator.set_global(nfxs.back());
     timer.stop("symbolic_forward");
+    DAO_ASSERT(sanity_check(), "sanity_check() failed");
     return *nfxs.back();
 }
 
@@ -138,6 +167,7 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
     for (int i = 0; i < num_nodes; ++i) {
         const auto node_fx = nfxs[i];  // f(x_1, x_2, ..., x_arity), which
                                       // was previously computed by forward.
+        DAO_ASSERT(node_fx, "node_fx is nullptr %d, %s", i, cg->nodes[i]->as_dummy_string().c_str());
         auto node_dEdfx = ndEdfs[i] = new dynet::Tensor();  // dE/df(x_1, x_2, ..., x_arity)
         node_dEdfx->d = node_fx->d;
         node_dEdfx->device = node_fx->device;
@@ -145,7 +175,7 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
     }
     for (int i = num_nodes - 1; i >= 0; --i) {
         if (!in_computation[i] || !needs_derivative[i]) continue; 
-        DAO_INFO("Symbolic BWD %d", i);
+        DAO_INFO_LEVEL(1, "Symbolic BWD %d", i);
         const Node* node = cg->nodes[i];
         for (auto arg : node->args)
             in_computation[arg] = true;
@@ -194,19 +224,44 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
         }
     }
 
+    acc_kernelss.push_back({});
+    auto& acc_kernels = acc_kernelss.back();
+
     for (VariableIndex i : cg->parameter_nodes) {
-        dynet::ParameterNode* pnode = static_cast<dynet::ParameterNode*>(cg->nodes[i]);
+        dynet::ParameterNodeBase* bnode = static_cast<dynet::ParameterNodeBase*>(cg->nodes[i]);
+        dynet::Tensor* grads = nullptr, *tmp = nullptr;
+        if (bnode->type == dynet::ParameterNodeBase::PARAM) {
+            assert(!bnode->aux_storage_size());
+            dynet::ParameterNode* pnode = static_cast<dynet::ParameterNode*>(bnode);
+            if (pnode->params.p) {
+                updated_params.insert(pnode->params.p.get());
+                grads = &pnode->params.get_storage().g;
+            }
+            else {
+                // kernel.set_inputs(ndEdfs[i]).set_outputs(&pnode->lparams.get_storage().all_grads);
+                updated_params.insert(pnode->lparams.p.get());
+                grads = &pnode->lparams.get_storage().all_grads;
+            }
+        }
+        else if (bnode->type == dynet::ParameterNodeBase::LOOKUP) {
+            dynet::LookupNode* lnode = static_cast<dynet::LookupNode*>(bnode);
+            updated_params.insert(lnode->params.p.get());
+            if (lnode->aux_storage_size()) {
+                assert(fwd_kernelss.back()[i].tmp_idx != (dynet::VariableIndex)(-1));
+                tmp = fwdtmpss.back()[fwd_kernelss.back()[i].tmp_idx];
+                grads = &lnode->params.get_storage().all_grads;
+            }
+        }
+        else {DAO_ERROR("Unknown ParameterNodeBase type");}
         DAO::Kernel kernel;
-        if (pnode->params.p) {
-            kernel.set_inputs(ndEdfs[i]).set_outputs(&pnode->params.get_storage().g);
-            updated_params.insert(pnode->params.p.get());
-        }
-        else {
-            kernel.set_inputs(ndEdfs[i]).set_outputs(&pnode->lparams.get_storage().all_grads);
-            updated_params.insert(pnode->lparams.p.get());
-        }
+        kernel.set_inputs(ndEdfs[i]).set_outputs(grads);
+        if (tmp) kernel.set_inputs(tmp);
         allocator.Register(std::move(kernel));
+        acc_kernels.push_back({bnode, ndEdfs[i], grads, tmp});
     }
+
+
+    DAO_ASSERT(sanity_check(), "sanity_check() failed");
     timer.stop("symbolic_backward");
 }
 
@@ -234,9 +289,8 @@ void Engine::run() {
 
     for (auto& nfxs: nfxss) {
         outputs.insert(nfxs.back());
-        for (auto& nfx: nfxs) {
-            if (outputs.count(nfx) == 0)
-                delete nfx;
+        for (size_t i = 0; i < nfxs.size() - 1; ++i) {
+            delete nfxs[i];
         }
     }
     nfxss.clear();
@@ -257,9 +311,9 @@ void Engine::run() {
     instructions.clear();
     fwd_kernelss.clear();
     bwd_kernelss.clear();
-    allocator.free_intermidiates();
-
+    allocator.reset();
     upd_kernelss.clear();
+    acc_kernelss.clear();
 }
 
 void Engine::report(std::ostream& o) {
@@ -298,7 +352,7 @@ void Engine::run_forward(Instruction& inst) {
         }
         DAO_ASSERT(allocator.check_on_gpu(node_fx), "node_fx->v is nullptr");
 
-        if (node->aux_mem) {
+        if (node->aux_storage_size()) {
             DAO_ASSERT(fwd_kernel.tmp_idx != (dynet::VariableIndex)(-1), "fwd_kernel.tmp_idx == -1");
             auto tmp_tensor = fwdtmps[fwd_kernel.tmp_idx];
             DAO_ASSERT(allocator.check_on_gpu(tmp_tensor), "node->aux_mem is nullptr");
@@ -311,7 +365,7 @@ void Engine::run_forward(Instruction& inst) {
     }
 }
 
-void initialize(int argc, char** argv) {
+void initialize() {
     dao_allocator.init((size_t)(DAO::cpu_mem * (1 << 20)), (size_t)(DAO::gpu_mem * (1 << 20)), 0, 0);
     dao_allocator.set_compute_stream(DAO::default_stream);
 }
@@ -322,6 +376,7 @@ void Engine::run_backward(Instruction& inst) {
     auto& nfxs = nfxss[inst.idx];
     auto& ndEdfs = ndEdfss[inst.idx];
     auto& bwd_kernels = bwd_kernelss[inst.idx];
+    auto& acc_kernels = acc_kernelss[inst.idx];
 
     ndEdfs.back()->v = cg->nodes.back()->device->kSCALAR_ONE;
 
@@ -341,18 +396,26 @@ void Engine::run_backward(Instruction& inst) {
         DAO_ASSERT(bwd_kernel.dEdfx_idx == ndEdfs.size() - 1 || allocator.check_on_gpu(node_dEdfx), "node_dEdfx.v is nullptr");
         DAO_ASSERT(allocator.check_on_gpu(node_dEdxai), "node_dEdxai.v is nullptr");
 
-        DAO_INFO("DAO BWD %u %p = %s", bwd_kernel.ai, node_dEdxai->v, node->as_dummy_string().c_str());
+        DAO_INFO_LEVEL(1, "DAO BWD %u %p = %s", bwd_kernel.ai, node_dEdxai->v, node->as_dummy_string().c_str());
 
         node->backward(xs, *node_fx, *node_dEdfx, bwd_kernel.ai, *node_dEdxai);
 
         allocator.complete();
     }
 
-    for (VariableIndex i : cg->parameter_nodes) {
-        dynet::ParameterNodeBase* pnode = static_cast<dynet::ParameterNodeBase*>(cg->nodes[i]);
+    DAO_INFO_LEVEL(1, "BWD finished");
+
+
+    for (auto& acc_grad_kernel: acc_kernels) {
+        auto& node = acc_grad_kernel.pnode;
         allocator.prepare();
-        DAO_ASSERT(allocator.check_on_gpu(ndEdfs[i]), "ndEdfs[i].v is nullptr");
-        pnode->accumulate_grad(*ndEdfs[i]);
+        DAO_ASSERT(!(node->aux_storage_size()) || acc_grad_kernel.tmp, "!node->aux_storage_size()=%lu || acc_grad_kernel.tmp = %p", node->aux_storage_size(), acc_grad_kernel.tmp);
+        DAO_ASSERT(allocator.check_on_gpu(acc_grad_kernel.ndEdf), "acc_grad_kernel.ndEdf.v is nullptr");
+        DAO_ASSERT(allocator.check_on_gpu(acc_grad_kernel.grads), "acc_grad_kernel.grads.v is nullptr");
+        DAO_ASSERT(!acc_grad_kernel.tmp || allocator.check_on_gpu(acc_grad_kernel.tmp), "tmp.v is nullptr");
+        if (acc_grad_kernel.tmp)
+            node->aux_mem = acc_grad_kernel.tmp->v;
+        acc_grad_kernel.pnode->accumulate_grad(*acc_grad_kernel.ndEdf);
         allocator.complete();
     }
 }
@@ -405,6 +468,7 @@ void Engine::symbolic_update() {
     enabled = old_enabled;
     // clear the updated params
     updated_params.clear();
+    DAO_ASSERT(sanity_check(), "sanity_check() failed");
 }
 
 void Engine::run_update(Instruction& inst) {

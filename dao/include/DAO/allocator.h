@@ -147,8 +147,9 @@ public:
     // set the tensor_id to be a global tensor (i.e. never evict)
     void set_global(TensorUID tensor_id);
     std::vector<float> get_values(TensorUID tensor_id);
+    void reset();
     // free all intermidiate tensors
-    void free_intermidiates();
+    // void free_intermidiates();
     Kernel& get_last_kernel();
     ~Allocator();
 };

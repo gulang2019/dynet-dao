@@ -40,13 +40,13 @@ Expression const_parameter(ComputationGraph& g, LookupParameter p) { return Expr
 Expression parameter(ComputationGraph& g, Parameter p) { return Expression(&g, g.add_parameters(p)); }
 Expression parameter(ComputationGraph& g, LookupParameter p) { return Expression(&g, g.add_parameters(p)); }
 Expression lookup(ComputationGraph& g, LookupParameter p, unsigned index) { return Expression(&g, g.add_lookup(p, index)); }
-Expression lookup(ComputationGraph& g, LookupParameter p, const unsigned* pindex) { return Expression(&g, g.add_lookup(p, pindex)); }
+Expression lookup(ComputationGraph& g, LookupParameter p, const unsigned* pindex) { assert(!"using pointer for lookup is not allowed with DAO"); return Expression(&g, g.add_lookup(p, pindex)); }
 Expression lookup(ComputationGraph& g, LookupParameter p, const vector<unsigned>& indices) { return Expression(&g, g.add_lookup(p, indices)); }
-Expression lookup(ComputationGraph& g, LookupParameter p, const vector<unsigned>* pindices) { return Expression(&g, g.add_lookup(p, pindices)); }
+Expression lookup(ComputationGraph& g, LookupParameter p, const vector<unsigned>* pindices) { assert(!"using pointer for lookup is not allowed with DAO"); return Expression(&g, g.add_lookup(p, pindices)); }
 Expression const_lookup(ComputationGraph& g, LookupParameter p, unsigned index) { return Expression(&g, g.add_const_lookup(p, index)); }
-Expression const_lookup(ComputationGraph& g, LookupParameter p, const unsigned* pindex) { return Expression(&g, g.add_const_lookup(p, pindex)); }
+Expression const_lookup(ComputationGraph& g, LookupParameter p, const unsigned* pindex) { assert(!"using pointer for lookup is not allowed with DAO"); return Expression(&g, g.add_const_lookup(p, pindex)); }
 Expression const_lookup(ComputationGraph& g, LookupParameter p, const vector<unsigned>& indices) { return Expression(&g, g.add_const_lookup(p, indices)); }
-Expression const_lookup(ComputationGraph& g, LookupParameter p, const vector<unsigned>* pindices) { return Expression(&g, g.add_const_lookup(p, pindices)); }
+Expression const_lookup(ComputationGraph& g, LookupParameter p, const vector<unsigned>* pindices) { assert(!"using pointer for lookup is not allowed with DAO"); return Expression(&g, g.add_const_lookup(p, pindices)); }
 Expression zeros(ComputationGraph& g, const Dim& d, Device *device) { return Expression(&g, g.add_function<Constant>(device, d, 0.f)); }
 // Expression zeroes(ComputationGraph& g, const Dim& d) {return zeros(g, d);}
 Expression ones(ComputationGraph& g, const Dim& d, Device *device) { return Expression(&g, g.add_function<Constant>(device, d, 1.f)); }

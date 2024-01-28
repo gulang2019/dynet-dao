@@ -115,17 +115,6 @@ DynetParams extract_dynet_params(int& argc,
         remove_args(argc, argv, argi, 2);
       }
     }
-    // Weight decay
-    else if (startswith(arg, "--dao-enable-async") ||
-             startswith(arg, "--dao_enable_async")) {
-      if (!has_arg(argi, argc, argv)) {
-        throw std::invalid_argument("--dao_enable_async");
-      } else {
-        string a2 = get_arg(argi, argv);
-        istringstream d(a2); d >> DAO::async_enabled; 
-        remove_args(argc, argv, argi, 2);
-      }
-    }
 
     else if (startswith(arg, "--dao-verbose") ||
              startswith(arg, "--dao_verbose")) {
@@ -145,15 +134,10 @@ DynetParams extract_dynet_params(int& argc,
     }
 
     // Weight decay
-    else if (startswith(arg, "--dao-enable-offload") ||
-             startswith(arg, "--dao_enable_offload")) {
-      if (!has_arg(argi, argc, argv)) {
-        throw std::invalid_argument("--dao_enable_offload");
-      } else {
-        string a2 = get_arg(argi, argv);
-        istringstream d(a2); d >> DAO::offload_enabled;
-        remove_args(argc, argv, argi, 2);
-      }
+    else if (startswith(arg, "--use_offload") ||
+             startswith(arg, "--enable_offload")) {
+      DAO::use_dao = true;
+      remove_args(argc, argv, argi, 1);
     }
 
     else if (startswith(arg, "--dao-cpu-mem") ||
@@ -351,15 +335,14 @@ void initialize(DynetParams& params) {
   kSCALAR_ONE = default_device->kSCALAR_ONE;
   kSCALAR_ZERO = default_device->kSCALAR_ZERO;
   cerr << "[dynet] memory allocation done.\n";
-
+#ifdef USE_DAO 
+  DAO::initialize(); 
+#endif 
 }
 
 void initialize(int& argc, char**& argv, bool shared_parameters) {
   DynetParams params = extract_dynet_params(argc, argv, shared_parameters);
   initialize(params);
-#ifdef USE_DAO 
-  DAO::initialize(argc, argv); 
-#endif 
 }
 
 void cleanup() {

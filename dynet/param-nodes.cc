@@ -308,7 +308,9 @@ void LookupNode::forward_dev_impl(const MyDevice & dev, const vector<const Tenso
     DYNET_ARG_CHECK(*pindex < params.get_storage().values.size(),
                     "Out-of-bounds attempt to access index " << *pindex << " for LookupParameter of size " << params.get_storage().values.size());
     DYNET_ASSERT(fx.d.batch_elems() == 1, "Batch dimension > 1 for lookup with single index");
-    tvec(fx).device(*dev.edevice) = tvec(params.get_storage().values[*pindex]) * params.current_weight_decay();
+    auto& lparams = params.get_storage();
+    lparams.values[*pindex].v = lparams.all_values.v + (*pindex)*lparams.dim.size();
+    tvec(fx).device(*dev.edevice) = tvec(lparams.values[*pindex]) * params.current_weight_decay();
   } else {
     DYNET_ASSERT(pindices, "Have neither index nor index vector in LookupNode");
     DYNET_ARG_CHECK(fx.d.batch_elems() == pindices->size(),
