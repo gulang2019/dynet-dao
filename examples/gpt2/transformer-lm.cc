@@ -752,6 +752,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 				|| iter >= dev_every_i_reports 
 				|| id + 1 == train_ids_minibatch.size()) {
 					engine->run();
+					engine->report();
 					update_cnt = 0;
 					for (auto& loss: symbolic_losses) {
 						float loss_value = engine->as_vector(*loss)[0];
