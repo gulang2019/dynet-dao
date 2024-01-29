@@ -61,7 +61,18 @@ echo "768 12 12 4 0 0.1 $skip_r 0 0 0.1 1 1024 1 1 0 models/gpt2-124M-$skip_r/mo
 cp /ssd1/siyuanch/workspace_zelongg/DAO/models/124M/dynet-model.params models/gpt2-124M-$skip_r/model.params
 # Add --train-percent 10 to below cmd for faster run
 ./build/examples/transformer-lm -c models/gpt2-124M/hparams.ini --model-path models/gpt2-124M-$skip_r --attn-lora-r 2 --attention-dropout-p $skip_r --ff-dropout-p 0 --reset-if-stuck --use-smaller-minibatch 2>&1 | tee models/gpt2-124M-$skip_r/train.log
+
+# Run transformer with dao 
+./build/examples/transformer-lm --train-percent 3 --use_offload --dao-gpu-mem 16384  --dao-verbose 0 -c models/gpt2-124M/hparams.ini --attn-lora-r 2 --attention-dropout-p 0.2 --ff-dropout-p 0.2 --reset-if-stuck --use-smaller-minibatch --dynet-seed 1 2>&1 | tee models/gpt2-124M-0.2/train.log
 ```
+
+DAO command line arguments
+- `--use_offload`: enable DAO's offloading backend; otherwise, we fallback to dynet's backend;
+- `--dao-gpu-mem [int]`: the gpu memory size for DAO's backend in MB;
+- `--dao-cpu-mem [int]`: the cpu memory size for DAO's backend in MB;
+- `--dao-verbose [int=0]`: the verbose level of DAO, default 0;
+- `--dao-debug`: enable a lot of assertions of DAO;
+- `--dynet-seed [int=0]`: the random seed; default = 0, meaning random;  
 
 Run xor test 
 ```bash 

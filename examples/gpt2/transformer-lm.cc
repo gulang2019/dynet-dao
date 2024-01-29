@@ -9,6 +9,7 @@
 using namespace std;
 using namespace dynet;
 using namespace transformer;
+using namespace DAO;
 
 #include <iostream>
 #include <fstream>
@@ -20,6 +21,8 @@ using namespace transformer;
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/program_options/parsers.hpp>
 #include <boost/program_options/variables_map.hpp>
+
+#include <dynet/param-nodes.h>
 
 using namespace std;
 using namespace dynet;
@@ -54,6 +57,13 @@ bool load_data(const variables_map& vm
 	, SentinelMarkers& sm);
 // ---
 bool load_data_gpt2(const variables_map& vm
+	, WordIdSentences& train_cor, WordIdSentences& devel_cor, WordIdSentences& test_cor
+	, const gpt_vocab& d);
+// ---
+
+// ---
+// load InstructionTuningDataset
+bool load_data_gpt2_fake(const variables_map& vm
 	, WordIdSentences& train_cor, WordIdSentences& devel_cor, WordIdSentences& test_cor
 	, const gpt_vocab& d);
 // ---
@@ -321,12 +331,12 @@ int main(int argc, char** argv) {
 
 		// initialise transformer object
 		transformer::TransformerLModel tf(tfc, d);
-		std::string model_file = model_path + "/model.params";
-		if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
-		{
-			cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
-			tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
-		}
+		// std::string model_file = model_path + "/model.params";
+		// if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
+		// {
+		// 	cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
+		// 	tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
+		// }
 		cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
 		size_t lora_count = 0;
 		for (const auto param : tf.get_model_parameters().parameters_list()) {
@@ -437,6 +447,23 @@ bool load_data_gpt2(const variables_map& vm
 		cerr << "WARNING: --dreport <num> (" << DREPORT << ")" << " is too large, <= training data size (" << train_cor.size() << ")" << endl;
 
 	// TODO set up <unk> ids
+
+	return true;
+}
+// ---
+
+// load InstructionTuningDataset
+bool load_data_gpt2_fake(const variables_map& vm
+	, WordIdSentences& train_cor, WordIdSentences& devel_cor, WordIdSentences& test_cor
+	, const gpt_vocab& d)
+{
+	std::string sample_data = "instruction" "Give three tips for staying healthy."
+    "input" ""
+    "output"  "1. Eat a balanced and nutritious diet: Make sure your meals are inclusive of a variety of fruits and vegetables, lean protein, whole grains, and healthy fats. This helps to provide your body with the essential nutrients to function at its best and can help prevent chronic diseases.\n\n2. Engage in regular physical activity: Exercise is crucial for maintaining strong bones, muscles, and cardiovascular health. Aim for at least 150 minutes of moderate aerobic exercise or 75 minutes of vigorous exercise each week.\n\n3. Get enough sleep: Getting enough quality sleep is crucial for physical and mental well-being. It helps to regulate mood, improve cognitive function, and supports healthy growth and immune function. Aim for 7-9 hours of sleep each night.";
+
+	train_cor.push_back(gpt_tokenize(d, sample_data));
+	devel_cor.push_back(gpt_tokenize(d, sample_data));
+	test_cor.push_back(gpt_tokenize(d, sample_data));
 
 	return true;
 }
@@ -609,6 +636,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	unsigned lr_epochs, float lr_eta_decay, unsigned lr_patience,
 	unsigned average_checkpoints)
 {
+	DAO_INFO("start training");
 	std::string params_out_file = model_path + "/model.params";
 
 	// model configuration
@@ -639,10 +667,22 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	// shuffle minibatches
 	cerr << endl << "***SHUFFLE" << endl;
 	std::shuffle(train_ids_minibatch.begin(), train_ids_minibatch.end(), *dynet::rndeng);
-
+	DAO_INFO("SHUFFLE Done");
 	unsigned sid = 0, id = 0, last_print = 0;
 	MyTimer timer_epoch("completed in"), timer_iteration("completed in");
 	unsigned epoch = 0, cpt = 0/*count of patience*/;
+
+	/*DAO's offloaded training*/
+	Engine* engine = nullptr;
+	std::vector<const dynet::Tensor*> symbolic_losses;
+	const int update_freq = 1;
+	int update_cnt = 0;
+	if (DAO::use_dao) {
+		DAO_INFO("Using DAO's offloaded training");
+		engine = new Engine(p_sgd);
+	}
+	/*End*/
+
 	while (epoch < max_epochs) {
 		transformer::ModelStats tstats;
 
@@ -673,6 +713,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 				timer_epoch.reset();
 			}
 
+			DAO_INFO("Train iter %u", iter);
 			// build graph for this instance
 			auto pCg = std::make_shared<dynet::ComputationGraph>();
 			dynet::ComputationGraph& cg = *pCg;// dynamic computation graph for each data batch
@@ -693,10 +734,59 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			Expression i_objective = i_xent;
 
 			// perform forward computation for aggregate objective
+			if (DAO::use_dao) {
+				for (size_t i = 0; i < pCg->nodes.size(); ++i) {
+					auto node = pCg->nodes[i];
+					if (node->forward_inplaced() || node->backward_inplaced()) {
+						DAO_INFO("Node %s inplaced fwd: %d bwd %d", node->as_dummy_string().c_str(), node->forward_inplaced(), node->backward_inplaced());
+					}
+				}
+				symbolic_losses.push_back(&engine->symbolic_forward(pCg, i_objective));
+				engine->symbolic_backward(pCg, i_objective);
+				engine->symbolic_update();
+				tstats._words_tgt += ctstats._words_tgt;
+				tstats._words_tgt_unk += ctstats._words_tgt_unk;
+				sid += train_cor_minibatch[train_ids_minibatch[id]].size();
+				iter += train_cor_minibatch[train_ids_minibatch[id]].size();
+				if (++update_cnt == update_freq
+				|| iter >= dev_every_i_reports 
+				|| id + 1 == train_ids_minibatch.size()) {
+					engine->run();
+					update_cnt = 0;
+					for (auto& loss: symbolic_losses) {
+						float loss_value = engine->as_vector(*loss)[0];
+						std::cout << "loss " << iter << " " << sid << " " << loss_value << std::endl;
+						// DAO_INFO_LEVEL(0, "loss %d, %d, %f", iter, sid, loss_value);
+						DAO_ASSERT(is_valid(loss_value), "nan or -nan values occurred!");
+						tstats._scores[1] += loss_value;
+					}
+					symbolic_losses.clear();
+					if (sid / report_every_i != last_print 
+							|| iter >= dev_every_i_reports
+							|| id + 1 == train_ids_minibatch.size()){
+						last_print = sid / report_every_i;
+
+						float elapsed = timer_iteration.elapsed();
+
+						p_sgd->status();
+						cerr << "t=" << timer_g.elapsed()/1000 << "s ";
+						cerr << "sents=" << sid << " ";
+						cerr /*<< "loss=" << tstats._scores[1]*/ << "words=" << tstats._words_tgt << " unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';
+						cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;
+						
+						timer_iteration.reset();
+						tstats = ModelStats();
+					}
+				}
+				++id;
+				continue;
+			}
+
 			cg.forward(i_objective);
 
 			// grab the parts of the objective
 			float loss = as_scalar(cg.get_value(i_xent.i));
+			std::cout << "loss " << iter << " " << sid << " " << loss << std::endl;
 			if (!is_valid(loss)){
 				std::cerr << "***Warning***: nan or -nan values occurred!" << std::endl;
 				++id;
@@ -751,8 +841,18 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			dstats._scores[1] += as_scalar(cg.forward(i_xent));
 		}*/
 		// batched version (faster)
+		engine->report();
+		DAO_INFO("start dev");
 		float dloss = 0.f;
 		for (const WordIdSentences& dsentb : dev_cor_minibatch){
+			if (DAO::use_dao) {
+				std::shared_ptr<dynet::ComputationGraph> cg = std::make_shared<dynet::ComputationGraph>();
+				auto i_xent = tf.build_graph(*cg, dsentb, nullptr, true);
+				auto& loss = engine->symbolic_forward(cg, i_xent);
+				engine->run();
+				dloss += engine->as_vector(loss)[0];
+				continue;
+			}
 			dynet::ComputationGraph cg;
 			auto i_xent = tf.build_graph(cg, dsentb, nullptr, true);
 			dloss += as_scalar(cg.incremental_forward(i_xent));
@@ -831,6 +931,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 	}
 finish:
+	delete engine; 
 	cerr << endl << "Transformer training completed!" << endl;
 	// DAO::profiler.dump(model_path + "/train");
 }
