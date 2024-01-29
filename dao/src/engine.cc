@@ -49,7 +49,7 @@ bool Engine::sanity_check() {
     for (auto& acc_kernels: acc_kernelss) {
         n_kernels += acc_kernels.size();
     }
-    return n_kernels == (allocator.all_accesses.size() + n_fwd_inplaced);
+    return n_kernels == (allocator.get_num_registered_kernels() + n_fwd_inplaced);
 }
 
 const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> cg, 
@@ -266,6 +266,7 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
 }
 
 void Engine::run() {
+    timer.start("run");
     for (auto o: outputs) {
         allocator.free(o);
         delete o;
@@ -284,11 +285,15 @@ void Engine::run() {
             run_backward(inst);
             timer.stop("run backward");
         } else if (inst.opcode == Instruction::UPDATE) {
+            DAO_INFO("DAO Exec Update");
+            timer.start("run update");
             run_update(inst); 
+            timer.stop("run update");
         }
     }
     evaluated = true;
     reset();
+    timer.stop("run");
 }
 
 void Engine::reset() {
@@ -463,6 +468,7 @@ void Engine::run_backward(Instruction& inst) {
 }
 
 void Engine::symbolic_update() {
+    timer.start("symbolic_update");
     instructions.push_back({Instruction::UPDATE, nullptr, 0, (unsigned)upd_kernelss.size()});
     upd_kernelss.push_back({});
     auto& upd_kernels = upd_kernelss.back();
@@ -512,6 +518,7 @@ void Engine::symbolic_update() {
     // clear the updated params
     updated_params.clear();
     DAO_ASSERT(sanity_check(), "sanity_check() failed");
+    timer.stop("symbolic_update");
 }
 
 void Engine::run_update(Instruction& inst) {

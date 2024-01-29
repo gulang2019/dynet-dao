@@ -331,12 +331,12 @@ int main(int argc, char** argv) {
 
 		// initialise transformer object
 		transformer::TransformerLModel tf(tfc, d);
-		// std::string model_file = model_path + "/model.params";
-		// if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
-		// {
-		// 	cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
-		// 	tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
-		// }
+		std::string model_file = model_path + "/model.params";
+		if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
+		{
+			cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
+			tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
+		}
 		cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
 		size_t lora_count = 0;
 		for (const auto param : tf.get_model_parameters().parameters_list()) {

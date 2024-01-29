@@ -16,10 +16,9 @@
 
 namespace DAO {
 
-
-
 struct MemBlock;
-class MemStorage; 
+class MemStorage;
+class Engine; 
 
 enum tensor_status_t{
     ONCPU,
@@ -107,6 +106,7 @@ private:
     std::unique_ptr<MemStorage> gpu_manager;
     
     std::shared_ptr<MemBlock> allocate_on_gpu (size_t size);
+
     logical_time_t logical_time = 0;
     logical_time_t registered_time = 0; 
     
@@ -115,16 +115,21 @@ private:
     // tensor_values for debug usage 
     std::unordered_map<TensorUID, std::vector<float> > tensor_values;
 
-
     struct AllocatorStatistics {
         size_t max_gpu_usage = 0;
         size_t max_cpu_usage = 0;        
     };
 
     AllocatorStatistics statistics;
+    std::vector<std::unordered_set<TensorUID> > all_accesses;
+    std::unordered_set<TensorUID> zero_init_tensors; 
+    Timer timer;
+
 public:
     Allocator() = default;
-    Timer timer; 
+    ~Allocator();
+    friend class Engine; 
+
     void init(size_t cpu_mem = CPU_MEM_SIZE, 
         size_t gpu_mem = GPU_MEM_SIZE,
         size_t cpu_grow_size = 1024*1024,
@@ -132,26 +137,43 @@ public:
         DoubleLinkedListStorage::allocation_strategy_t allocation_strategy = DoubleLinkedListStorage::FIRST_FIT,
         DoubleLinkedListStorage::eviction_strategy_t evict_strategy = DoubleLinkedListStorage::WEIGHTED_BELADY); 
 
-    std::vector<std::unordered_set<TensorUID> > all_accesses;
-    std::unordered_set<TensorUID> zero_init_tensors; 
     void set_compute_stream(cudaStream_t stream);
-    TensorRecord& lookup_tensor(TensorUID tensor_id);
-    void finish_register();
-    void Register(Kernel&& kernel);
-    void prepare();
-    void* prepare(TensorUID tensor_id, bool initialize = false);
-    void complete();
+    
+    /**
+     * @brief prepare a tensor, allocate memory for it;
+     * @param tensor_id dynet::Tensor*
+     * @param is_global whether this tensor is a global tensor (used to allocate from DyNet)
+    */    
+    void* prepare(TensorUID tensor_id, bool is_global = false);
+    
+    /** Get values of a tensor*/
+    std::vector<float> get_values(TensorUID tensor_id);
+
     void display(std::ostream& o) const;
     bool check_on_gpu(const dynet::Tensor* t) const;
-    void free(TensorUID tensor_id);
-    // set the tensor_id to be a global tensor (i.e. never evict)
-    void set_global(TensorUID tensor_id);
-    std::vector<float> get_values(TensorUID tensor_id);
+    
+    /** Register a kernel for delayed execution, called by allocator/trainer*/
+    void Register(Kernel&& kernel);
+
+protected:
+    /** Reset states*/
     void reset();
     // free all intermidiate tensors
     // void free_intermidiates();
     Kernel& get_last_kernel();
-    ~Allocator();
+    /** Calculate the last accesses for pushed kernels*/
+    void finish_register();
+    /** Prepare for a kernel*/
+    void prepare();
+    /** Free up memory for a kernel*/
+    void complete();
+    /** Free up memory for a tensor*/
+    void free(TensorUID tensor_id);
+    /** Set a tensor to be global tensor, need mannual free*/
+    void set_global(TensorUID tensor_id);
+    /** Get the number of registered kernels*/
+    size_t get_num_registered_kernels() {return all_accesses.size();}
+
 };
 
 extern Allocator dao_allocator;

@@ -204,7 +204,6 @@ void Allocator::prepare() {
 
 
 void Allocator::complete() {
-    CUDA_CHECK(cudaDeviceSynchronize());
     timer.start("complete");
     assert(gpu_manager->check_MemStorage());
     assert(cpu_manager->check_MemStorage());
@@ -254,11 +253,9 @@ void Allocator::display(std::ostream& o) const {
         o << "max gpu usage: " << (statistics.max_gpu_usage >> 30) << "GB" << std::endl;
     if (verbose)
     {o << "Records: " << std::endl;
-    global_memory_record->display(o);
-    o << "CPU Memory: " << std::endl;
+    global_memory_record->display(o);}
     cpu_manager->display(o);
-    o << "GPU Memory: " << std::endl;
-    gpu_manager->display(o);}
+    gpu_manager->display(o);
     timer.show(o);
     o << "------------Allocator END-------------" << std::endl;
 }
@@ -360,9 +357,6 @@ std::vector<float> Allocator::get_values(TensorUID tensor_id) {
     return std::move(value);
 }
 
-TensorRecord& Allocator::lookup_tensor(TensorUID tensor_id) {
-    return global_memory_record->lookup_tensor(tensor_id);
-}
 
 void Allocator::Register(Kernel&& kernel) {
     all_accesses.push_back(std::unordered_set<TensorUID>(kernel._inputs.begin(), kernel._inputs.end()));

@@ -78,8 +78,6 @@ MemStorage::MemStorage(device_type_t device_type, const std::string& name):
 }
 
 
-
-
 DoubleLinkedListStorage::DoubleLinkedListStorage(
     MemStorage::device_type_t device_type,
     size_t device_mem_size,
@@ -131,7 +129,8 @@ DoubleLinkedListStorage::DoubleLinkedListStorage(
 }
 
 std::shared_ptr<MemBlock> DoubleLinkedListStorage::allocate(size_t size) {
-    DAO_ASSERT(this -> check_MemStorage(), "before allocation");
+    timer.start("allocate");
+    if (debug_mode) DAO_ASSERT(check_MemStorage(), "before allocation");
     size = ROUND_UP(size, alignment);
     // first check if there has available space
     std::shared_ptr<MemBlock> best_iter = nullptr;
@@ -184,6 +183,7 @@ std::shared_ptr<MemBlock> DoubleLinkedListStorage::allocate(size_t size) {
             }
         }
     }
+    timer.stop("allocate");
     if (best_iter == nullptr) return nullptr;
     // allocate and split 
     assert(best_iter->allocated == false && best_iter->payload_size >= size);
@@ -212,15 +212,14 @@ bool DoubleLinkedListStorage::splitAndAllocate(size_t size, std::shared_ptr<MemB
 }
 
 
-
 bool DoubleLinkedListStorage::split_cond(size_t block_size, size_t required_size) {
     return (block_size - required_size) >= (split_threshold);
 }
 
 
-
 std::pair<std::shared_ptr<MemBlock>,std::shared_ptr<MemBlock> > 
 DoubleLinkedListStorage::evict(size_t size, std::vector<std::shared_ptr<MemBlock>>& blocks) {
+    timer.start("evict");
     size = ROUND_UP(size, alignment);
     double best_score = 0;
     std::shared_ptr<MemBlock> front, back, best_front, best_back;
@@ -330,9 +329,9 @@ DoubleLinkedListStorage::evict(size_t size, std::vector<std::shared_ptr<MemBlock
             iter = iter->next; 
         }
     }
+    timer.stop("evict");
     return std::make_pair(best_front, best_back);
 }
-
 
 
 double DoubleLinkedListStorage::eviction_score(
@@ -464,16 +463,19 @@ std::shared_ptr<MemBlock> DoubleLinkedListStorage::mergeAndAllocate(
     size_t size, 
     const std::shared_ptr<MemBlock>& front, 
     const std::shared_ptr<MemBlock>& back) {
+    timer.start("mergeAndAllocate");
     size = ROUND_UP(size, alignment);
     std::shared_ptr<MemBlock> new_block = merge(front, back);
     splitAndAllocate(size, new_block);
     DAO_ASSERT((size) % (this -> alignment) == 0, "block split size not aligned");
     DAO_ASSERT((unsigned long)(new_block -> physical_location_start) % (this -> alignment) == 0, "new block start location not properly aligned");
     DAO_ASSERT((unsigned long)(new_block -> physical_location_end) % (this -> alignment) == 0, "new block end location not properly aligned");
+    timer.stop("mergeAndAllocate");
     return new_block;
 }
 
 void DoubleLinkedListStorage::free(const std::shared_ptr<MemBlock>& block) {
+    timer.start("free");
     assert(block->allocated == true);
     block->allocated = false;
     block->record = nullptr;
@@ -497,9 +499,13 @@ void DoubleLinkedListStorage::free(const std::shared_ptr<MemBlock>& block) {
     if (front != block || back != block->next) {
         merge(front, back);
     }
+    timer.stop("free");
 }
 
 void DoubleLinkedListStorage::display(std::ostream& o) const {
+    o << "-----------" <<  name << "-----------" << std::endl;
+    timer.show(o);
+    if (verbose) {
     display(o, start, end);
     auto iter = start;
     assert(iter->prev == nullptr);
@@ -511,7 +517,8 @@ void DoubleLinkedListStorage::display(std::ostream& o) const {
         iter = iter->next; 
     }
     assert(iter == end);
-    assert(iter->next == nullptr);
+    assert(iter->next == nullptr);}
+    o << "----------"<< name << " END-----------" << std::endl;
 }
 
 void DoubleLinkedListStorage::display(std::ostream& o, 

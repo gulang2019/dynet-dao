@@ -35,9 +35,7 @@ struct Engine {
     void symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg, 
             const dynet::Expression& expr); 
     void symbolic_update();
-
-    bool sanity_check();
-
+    
     /** 
      * Run the instructions in the engine.
      * Keep the outputs of the forward pass in the engine.
@@ -45,9 +43,7 @@ struct Engine {
      * Drop the gradients & intermidiates.
     */
     void run();
-    void run_forward(Instruction& inst);
-    void run_backward(Instruction& inst);
-    void run_update(Instruction& inst);
+
     /** 
      * Clear up the all kernels, instructions, and outputs.
     */
@@ -57,6 +53,11 @@ struct Engine {
     void report(std::ostream& os = std::cout) const;
     std::vector<float> as_vector(const dynet::Tensor& tensor);
 
+private: 
+    bool sanity_check();
+    void run_forward(Instruction& inst);
+    void run_backward(Instruction& inst);
+    void run_update(Instruction& inst);
     struct FWDKernel {
         // dynet::VariableIndex fx_idx;
         dynet::Tensor* tmp_tensor = nullptr;

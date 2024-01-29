@@ -10,6 +10,7 @@
 #include <iostream>
 
 #include "globals.h"
+#include "utils.h"
 
 namespace DAO {
 
@@ -53,8 +54,6 @@ struct GPURealMallocr: public DeviceRawMallocr {
     size_t allocated = 1024;
 };
 
-
-
 class MemStorage{
 protected: 
     std::unique_ptr<DeviceRawMallocr> device_mallocr;
@@ -78,12 +77,6 @@ public:
     */
     virtual std::pair<std::shared_ptr<MemBlock>,std::shared_ptr<MemBlock> > 
     evict(size_t size, std::vector<std::shared_ptr<MemBlock>>& blocks) = 0;
-    /**
-     * @brief Merge a list of blocks into one block
-     * @param start The start of the list of blocks, inclusive
-     * @param end The end of the list of blocks, exclusive
-    */
-    virtual std::shared_ptr<MemBlock> merge(const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back) = 0;
     /**
      * @brief Merge a list of blocks into one block and allocate a new block
      * @param size The size of the new block
@@ -144,7 +137,12 @@ public:
     void free(const std::shared_ptr<MemBlock>& block) override;
     std::pair<std::shared_ptr<MemBlock>,std::shared_ptr<MemBlock> > 
     evict(size_t size, std::vector<std::shared_ptr<MemBlock>>& blocks) override;
-    std::shared_ptr<MemBlock> merge(const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back) override;
+    /**
+     * @brief Merge a list of blocks into one block
+     * @param start The start of the list of blocks, inclusive
+     * @param end The end of the list of blocks, exclusive
+    */
+    std::shared_ptr<MemBlock> merge(const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back);
     std::shared_ptr<MemBlock> mergeAndAllocate(size_t size, const std::shared_ptr<MemBlock>& front, const std::shared_ptr<MemBlock>& back) override;
     void display(std::ostream& o) const override;
     bool check_MemStorage() override;
@@ -164,6 +162,7 @@ private:
     std::shared_ptr<MemBlock> end; 
     std::vector<void*> allocated_list;
     const logical_time_t& logical_time; 
+    Timer timer; 
 };
 
 
