@@ -109,7 +109,7 @@ DoubleLinkedListStorage::DoubleLinkedListStorage(
     end->prev = first_block;
     void* ptr = device_mallocr->raw_malloc(device_mem_size + alignment);
 
-    DAO_ASSERT(ptr, "failed to allocate memory");
+    DAO_ASSERT(ptr, "Not enough memory for DoubleLinkedListStorage %lu MB", (device_mem_size + alignment) / (1 << 20));
 
     allocated_list.push_back(ptr);
     first_block->physical_location_start = (void*)ROUND_UP((unsigned long)ptr, alignment);

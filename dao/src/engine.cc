@@ -70,14 +70,6 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
         num_nodes_evaluated <= expr.i; ++num_nodes_evaluated) {
         DAO_INFO_LEVEL(2, "Symbolic FWD %u %s", num_nodes_evaluated, cg->nodes[num_nodes_evaluated]->as_dummy_string().c_str());
         const Node* node = cg->nodes[num_nodes_evaluated];
-        if (node->forward_inplaced()) continue;
-        std::vector<dynet::VariableIndex> xs_idx;
-        for (VariableIndex arg : node->args) {
-            xs_idx.push_back(arg);
-            if (cg->nodes[arg]->forward_inplaced()) {
-                xs_idx.back() = cg->nodes[arg]->args[0];
-            }
-        }
         auto& node_fx = nfxs[num_nodes_evaluated] = new dynet::Tensor();
         node_fx->d = node->dim;
         // Get the device
@@ -86,12 +78,13 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
         "SimpleExecutionEngine::incremental_forward");
         node_fx->device = node->device;
         node_fx->mem_pool = dynet::DeviceMempool::FXS;
-        // Get the memory to store f(xs)
+
+        // for inplaced node, we only need to copy the pointer
+        if (node->forward_inplaced()) continue;
 
         FWDKernel fwd_kernel;
         DAO::Kernel kernel;
         fwd_kernel.fx_idx = num_nodes_evaluated;
-        fwd_kernel.xs_idx = std::move(xs_idx);
         fwd_kernel.tmp_idx = (dynet::VariableIndex)(-1);
         if (node->aux_storage_size()) {
             fwdtmps.push_back(new dynet::Tensor());
@@ -100,10 +93,16 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
             kernel.set_inputs(fwdtmps.back());
         }
         std::vector<const dynet::Tensor*> xs;
-        for (auto x: fwd_kernel.xs_idx) {
-            xs.push_back(nfxs[x]);
+        for (auto idx: node->args) {
+            xs.push_back(nfxs[idx]);
+            // if it is inplaced, we prepare the child node for the uniqueness; 
+            if (cg->nodes[idx]->forward_inplaced()) {
+                xs.back() = nfxs[cg->nodes[idx]->args[0]];
+            }
         }
         kernel.set_inputs(xs).set_outputs(node_fx);
+
+        // add the parameter input into the kernel
         if (param_idx < cg->parameter_nodes.size()
         && cg->parameter_nodes[param_idx] == num_nodes_evaluated) {
             auto param_base = static_cast<const dynet::ParameterNodeBase*>(node);
@@ -122,6 +121,8 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
             else {DAO_ERROR("Unknown ParameterNodeBase type");}
             param_idx++;
         }
+
+
         allocator.Register(std::move(kernel));
         fwd_kernels.push_back(std::move(fwd_kernel));
     }
@@ -180,42 +181,38 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
         for (auto arg : node->args)
             in_computation[arg] = true;
         if (node->backward_inplaced()) continue;
-        std::vector<dynet::VariableIndex> xs_idx(node->arity());
         // std::vector<const Tensor*> xs(node->arity());
         unsigned ai = 0;
-        for (VariableIndex arg: node->args) {
-            xs_idx[ai] = arg;
-            if (cg->nodes[arg]->forward_inplaced()) {
-                xs_idx[ai] = cg->nodes[arg]->args[0];
-            }
-            ++ai;
-        }
-        ai = 0;
         for (VariableIndex arg: node->args) {
             if (needs_derivative[arg]) {
                 struct BWDKernel bwdKernel;
                 bwdKernel.ai = ai;
-                bwdKernel.xs_idx = xs_idx;
                 bwdKernel.fx_idx = i;
-                bwdKernel.dEdfx_idx = i;
-                bwdKernel.dEdxai_idx = arg;
-                if (cg->nodes[arg]->backward_inplaced())
-                    bwdKernel.dEdxai_idx = cg->nodes[arg]->args[0];
+
                 std::vector<const dynet::Tensor*> xs;
-                for (auto x: xs_idx) {
+                for (auto x: node->args) {
                     xs.push_back(nfxs[x]);
+                    if (cg->nodes[x]->forward_inplaced()) {
+                        xs.back() = nfxs[cg->nodes[x]->args[0]];
+                    }
                 }
                 DAO::Kernel kernel;
-                kernel.set_inputs(std::move(xs))
-                    .set_inputs(nfxs[bwdKernel.fx_idx]);
-                if (first_visited[bwdKernel.dEdxai_idx]) {
-                    kernel.set_zeroed(ndEdfs[bwdKernel.dEdxai_idx]);
-                    first_visited[bwdKernel.dEdxai_idx] = false;
+                kernel.set_inputs(std::move(xs));
+                
+                if (node->forward_inplaced()) kernel.set_inputs(nfxs[i]);
+                else kernel.set_inputs(nfxs[node->args[0]]);
+
+                auto dEdfxai = cg->nodes[arg]->backward_inplaced()? cg->nodes[arg]->args[0] : arg;
+
+                if (first_visited[dEdfxai]) {
+                    kernel.set_zeroed(ndEdfs[dEdfxai]);
+                    first_visited[dEdfxai] = false;
                 }
-                else kernel.set_outputs(ndEdfs[bwdKernel.dEdxai_idx]);
+                else kernel.set_outputs(ndEdfs[dEdfxai]);
+                
                 if (i != num_nodes - 1) {  // for all but the last node
-                    DAO_ASSERT(!first_visited[bwdKernel.dEdfx_idx], "first_visited[%u] = true", bwdKernel.dEdfx_idx);
-                    kernel.set_inputs(ndEdfs[bwdKernel.dEdfx_idx]);
+                    DAO_ASSERT(!first_visited[i], "first_visited[%u, %s] = true", i, cg->nodes[i]->as_dummy_string().c_str());
+                    kernel.set_inputs(ndEdfs[i]);
                 }
                 allocator.Register(std::move(kernel));
                 bwd_kernels.push_back(std::move(bwdKernel));
@@ -331,34 +328,47 @@ void Engine::run_forward(Instruction& inst) {
 
     for (auto& fwd_kernel: fwd_kernels) {
         auto& node_fx = nfxs[fwd_kernel.fx_idx];
-        std::vector<const Tensor*> xs;
         auto node = cg->nodes[fwd_kernel.fx_idx];
-        for (auto x: fwd_kernel.xs_idx) {
+        std::vector<const Tensor*> xs;
+        for (auto x: node->args) {
             xs.push_back(nfxs[x]);
         }
-
-        std::vector<std::string> input_sizes;
-        for (auto x: xs) {
-            std::stringstream ss;
-            ss << x->d;
-            input_sizes.push_back(ss.str());
-        }
-        std::stringstream ss;
-        ss << node_fx->d;
-        DAO_INFO_LEVEL(1, "FWD %s = %s", ss.str().c_str(), node->as_string(input_sizes).c_str());
+        
         allocator.prepare();
-        for (auto x: xs) {
-            DAO_ASSERT(allocator.check_on_gpu(x), "x->v is nullptr");
-        }
-        DAO_ASSERT(allocator.check_on_gpu(node_fx), "node_fx->v is nullptr");
 
-        if (node->aux_storage_size()) {
-            DAO_ASSERT(fwd_kernel.tmp_idx != (dynet::VariableIndex)(-1), "fwd_kernel.tmp_idx == -1");
+        if (debug_mode) {
+            std::vector<std::string> input_sizes;
+            for (auto x: node->args) {
+                std::stringstream ss;
+                ss << cg->nodes[x]->as_dummy_string() << ":" <<  nfxs[x]->d;
+                input_sizes.push_back(ss.str());
+            }
+            std::stringstream ss;
+            ss << node_fx->d;
+            DAO_INFO_LEVEL(1, "FWD %s = %s", ss.str().c_str(), node->as_string(input_sizes).c_str());
+
+            for (auto arg: node->args) {
+                DAO_ASSERT(allocator.check_on_gpu(nfxs[cg->nodes[arg]->forward_inplaced()?cg->nodes[arg]->args[0]:arg]), "x->v is nullptr");
+            }
+            DAO_ASSERT(allocator.check_on_gpu(node_fx), "node_fx->v is nullptr");
+            if (node->aux_storage_size()) {
+                DAO_ASSERT(fwd_kernel.tmp_idx != (dynet::VariableIndex)(-1), "fwd_kernel.tmp_idx == -1");
+                DAO_ASSERT(allocator.check_on_gpu(fwdtmps[fwd_kernel.tmp_idx]), "node->aux_mem is nullptr");
+            }
+             DAO_ASSERT(node_fx->v, "node_fx->v is nullptr");
+        }
+
+        if (node->aux_storage_size()) {            
             auto tmp_tensor = fwdtmps[fwd_kernel.tmp_idx];
-            DAO_ASSERT(allocator.check_on_gpu(tmp_tensor), "node->aux_mem is nullptr");
             node->aux_mem = tmp_tensor->v;
         } 
-        DAO_ASSERT(node_fx->v, "node_fx->v is nullptr");
+
+        for(auto idx: node->args) {
+            auto& xnode = cg->nodes[idx];
+            if (xnode->forward_inplaced()) {
+                nfxs[idx]->v = nfxs[xnode->args[0]]->v;
+            }
+        }
 
         node->forward(xs, *node_fx);
         allocator.complete();
@@ -382,21 +392,37 @@ void Engine::run_backward(Instruction& inst) {
 
     for (auto& bwd_kernel: bwd_kernels) {
         allocator.prepare();
-        std::vector<const Tensor*> xs;
-        for (auto x: bwd_kernel.xs_idx) {
-            xs.push_back(nfxs[x]);
-            DAO_ASSERT(allocator.check_on_gpu(nfxs[x]), "nfxs[x].v is nullptr");
-        }
         auto node = cg->nodes[bwd_kernel.fx_idx];
+        std::vector<const Tensor*> xs;
+        for (auto arg: node->args) {
+            auto& nfx = nfxs[arg];
+            auto& xnode = cg->nodes[arg];
+            if (xnode->forward_inplaced()) {
+                nfx->v = nfxs[xnode->args[0]]->v;
+            }
+            xs.push_back(nfx);
+        }
         auto& node_fx = nfxs[bwd_kernel.fx_idx];
-        auto& node_dEdfx = ndEdfs[bwd_kernel.dEdfx_idx];
-        auto& node_dEdxai = ndEdfs[bwd_kernel.dEdxai_idx];
+        auto& node_dEdfx = ndEdfs[bwd_kernel.fx_idx];
+        auto& arg = node->args[bwd_kernel.ai];
+        auto& node_dEdxai = ndEdfs[arg];
+        auto& ainode = cg->nodes[arg];
 
-        DAO_ASSERT(allocator.check_on_gpu(node_fx), "node_fx.v is nullptr");
-        DAO_ASSERT(bwd_kernel.dEdfx_idx == ndEdfs.size() - 1 || allocator.check_on_gpu(node_dEdfx), "node_dEdfx.v is nullptr");
-        DAO_ASSERT(allocator.check_on_gpu(node_dEdxai), "node_dEdxai.v is nullptr");
+        if (node->forward_inplaced()) node_fx->v = nfxs[node->args[0]]->v;
+        if (ainode->forward_inplaced()) node_dEdxai->v = ndEdfs[ainode->args[0]]->v;
 
-        DAO_INFO_LEVEL(1, "DAO BWD %u %p = %s", bwd_kernel.ai, node_dEdxai->v, node->as_dummy_string().c_str());
+        if (debug_mode) {
+            for (auto arg: node->args) {
+                auto xnode = cg->nodes[arg];
+                DAO_ASSERT(nfxs[arg]->v, "nfxs[xnode]->v is nullptr");
+                DAO_ASSERT(allocator.check_on_gpu(nfxs[xnode->forward_inplaced()?xnode->args[0]:arg]), "x->v is nullptr");
+            }
+            DAO_ASSERT(allocator.check_on_gpu(node->forward_inplaced()?nfxs[node->args[0]]:node_fx), "node_fx.v is nullptr");
+            DAO_ASSERT(bwd_kernel.fx_idx == ndEdfs.size() - 1 || allocator.check_on_gpu(node_dEdfx), "node_dEdfx.v is nullptr");
+            DAO_ASSERT(allocator.check_on_gpu(node->backward_inplaced()?ndEdfs[cg->nodes[arg]->args[0]]:node_dEdxai), "node_dEdxai.v is nullptr");
+            DAO_ASSERT(node_dEdfx->v && node_dEdxai->v, "node_dEdfx->v && node_dEdxai->v");
+            DAO_INFO_LEVEL(1, "DAO BWD %u %p = %s", bwd_kernel.ai, node_dEdxai->v, node->as_dummy_string().c_str());
+        }
 
         node->backward(xs, *node_fx, *node_dEdfx, bwd_kernel.ai, *node_dEdxai);
 
@@ -442,7 +468,8 @@ void Engine::symbolic_update() {
             upd_kernels.push_back(std::move(upd_kernel));            
         }
         else {
-            DAO_WARNING("param[%u] is not updated", i);
+            if (debug_mode)
+                DAO_WARNING("param[%u] is not updated", i);
         }
     }
     for (size_t i = 0; i < lparams.size(); ++i) {

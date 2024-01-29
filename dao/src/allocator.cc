@@ -170,6 +170,7 @@ std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
             evict_record->status = ONCPU;
             evicted_block->record = nullptr;
             evicted_block->allocated = false;
+            evict_record->tensor_id->v = nullptr;
         }
     }
     std::shared_ptr<MemBlock> GPU_block = gpu_manager -> mergeAndAllocate(size, front, back);
@@ -215,7 +216,7 @@ void Allocator::complete() {
         record.access_pattern.pop();
         record.event = event; 
         if (record.last_access == logical_time) {
-            DAO_INFO_LEVEL(1, "free tensor %lu", (size_t)tensor_id & 0xfff);
+            DAO_INFO_LEVEL(2, "free tensor %lu", (size_t)tensor_id & 0xfff);
             free(tensor_id);            
         }
         else {
@@ -405,6 +406,7 @@ void Allocator::set_compute_stream(cudaStream_t stream) {
 
 bool Allocator::check_on_gpu(const dynet::Tensor* tensor_id) const {
     auto& record = global_memory_record->lookup_tensor(const_cast<TensorUID>(tensor_id));
+    DAO_ASSERT(record.status != UNINITIALIZED, "tensor not initialized");
     DAO_ASSERT((dynet::Tensor*)tensor_id->v == (dynet::Tensor*)record.block_ptr->physical_location_start, "tensor_id->v != record.block_ptr->physical_location_start");
     DAO_ASSERT((((dynet::Tensor*)tensor_id)->d.size() * sizeof(float)) == record.tensor_size, "tensor_id->d.size() != record.tensor_size");
     DAO_ASSERT(record.block_ptr->physical_location_start + record.tensor_size <= record.block_ptr->physical_location_end, "tensor_id->v + record.tensor_size > record.block_ptr->physical_location_end");

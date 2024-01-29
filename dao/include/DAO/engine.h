@@ -46,16 +46,12 @@ struct Engine {
 
     struct FWDKernel {
         dynet::VariableIndex fx_idx;
-        std::vector<dynet::VariableIndex> xs_idx;
         dynet::VariableIndex tmp_idx = (dynet::VariableIndex)(-1);
     };
 
     struct BWDKernel {
         unsigned ai;
-        std::vector<dynet::VariableIndex> xs_idx;
         dynet::VariableIndex fx_idx;
-        dynet::VariableIndex dEdfx_idx;
-        dynet::VariableIndex dEdxai_idx;
     };
 
     struct UPDKernel {
