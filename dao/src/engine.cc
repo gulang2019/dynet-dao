@@ -79,9 +79,11 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
         "SimpleExecutionEngine::incremental_forward");
         node_fx->device = node->device;
         node_fx->mem_pool = dynet::DeviceMempool::FXS;
+        node_fx->name = node->as_dummy_string() + "_fx";
 
         // for inplaced node, we only need to copy the pointer
         if (node->forward_inplaced()) {
+            DAO_ASSERT(!cg->nodes[node->args[0]]->forward_inplaced(), "cg->nodes[node->args[0]]->forward_inplaced()");
             n_fwd_inplaced ++;
             continue;
         }
@@ -91,17 +93,18 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
         fwd_kernel.tmp_tensor = nullptr;
         if (node->aux_storage_size()) {
             fwd_kernel.tmp_tensor = new dynet::Tensor();
+            fwd_kernel.tmp_tensor->name = node->as_dummy_string() + "_tmp";
             assert(fwd_kernel.tmp_tensor);
             fwd_kernel.tmp_tensor->d = dynet::Dim({(unsigned)(node->aux_storage_size() / sizeof(float) + 1)});
             fwdtmps.push_back(fwd_kernel.tmp_tensor);
             kernel.set_inputs(fwd_kernel.tmp_tensor);
         }
         std::vector<const dynet::Tensor*> xs;
-        for (auto idx: node->args) {
-            xs.push_back(nfxs[idx]);
+        for (auto arg: node->args) {
+            xs.push_back(nfxs[arg]);
             // if it is inplaced, we prepare the child node for the uniqueness; 
-            if (cg->nodes[idx]->forward_inplaced()) {
-                xs.back() = nfxs[cg->nodes[idx]->args[0]];
+            if (cg->nodes[arg]->forward_inplaced()) {
+                xs.back() = nfxs[cg->nodes[arg]->args[0]];
             }
         }
         kernel.set_inputs(xs).set_outputs(node_fx);
@@ -154,8 +157,23 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
     DAO_ASSERT(num_nodes <= cg->nodes.size(), "num_nodes is larger than cg->nodes.size()");
     
     std::vector<bool> needs_derivative(num_nodes, false);
-    for (auto i : cg->parameter_nodes)
-        needs_derivative[i] = true;
+    for (auto i : cg->parameter_nodes){
+        auto p_node = static_cast<const dynet::ParameterNodeBase*>(cg->nodes[i]);
+        if (p_node->type == dynet::ParameterNodeBase::PARAM) {
+            auto param_node = static_cast<const dynet::ParameterNode*>(p_node); 
+            if (param_node->params.p) {
+                needs_derivative[i] = param_node->params.p->is_updated();
+            }
+            else {
+                needs_derivative[i] = param_node->lparams.p->is_updated();
+            }
+        }
+        else if (p_node->type == dynet::ParameterNodeBase::LOOKUP) {
+            auto lookup_node = static_cast<const dynet::LookupNode*>(p_node);
+            needs_derivative[i] = lookup_node->params.p->is_updated();
+        }
+        else {DAO_ERROR("Unknown ParameterNodeBase type");}
+    }
 
     for (unsigned ni = 0; ni < num_nodes; ++ni) {
       bool nd = needs_derivative[ni];
@@ -172,6 +190,7 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
                                       // was previously computed by forward.
         DAO_ASSERT(node_fx, "node_fx is nullptr %d, %s", i, cg->nodes[i]->as_dummy_string().c_str());
         auto node_dEdfx = ndEdfs[i] = new dynet::Tensor();  // dE/df(x_1, x_2, ..., x_arity)
+        node_dEdfx->name = cg->nodes[i]->as_dummy_string() + "_dEdfx";
         node_dEdfx->d = node_fx->d;
         node_dEdfx->device = node_fx->device;
         node_dEdfx->mem_pool = dynet::DeviceMempool::DEDFS;
@@ -231,6 +250,7 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
     auto& acc_kernels = acc_kernelss.back();
 
     for (VariableIndex i : cg->parameter_nodes) {
+        if (!needs_derivative[i]) continue;
         dynet::ParameterNodeBase* bnode = static_cast<dynet::ParameterNodeBase*>(cg->nodes[i]);
         dynet::Tensor* grads = nullptr;
         if (bnode->type == dynet::ParameterNodeBase::PARAM) {
@@ -259,7 +279,6 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
         allocator.Register(std::move(kernel));
         acc_kernels.push_back({bnode, ndEdfs[i], grads, tmp});
     }
-
 
     DAO_ASSERT(sanity_check(), "sanity_check() failed");
     timer.stop("symbolic_backward");
@@ -358,7 +377,7 @@ void Engine::run_forward(Instruction& inst) {
         
         allocator.prepare();
 
-        if (debug_mode) {
+        if (verbose) {
             std::vector<std::string> input_sizes;
             for (auto x: node->args) {
                 std::stringstream ss;
@@ -368,7 +387,10 @@ void Engine::run_forward(Instruction& inst) {
             std::stringstream ss;
             ss << node_fx->d;
             DAO_INFO_LEVEL(1, "FWD %s = %s", ss.str().c_str(), node->as_string(input_sizes).c_str());
-
+        }
+        
+        if (debug_mode) {
+            
             for (auto arg: node->args) {
                 DAO_ASSERT(allocator.check_on_gpu(nfxs[cg->nodes[arg]->forward_inplaced()?cg->nodes[arg]->args[0]:arg]), "x->v is nullptr");
             }
@@ -379,6 +401,7 @@ void Engine::run_forward(Instruction& inst) {
 
         if (fwd_kernel.tmp_tensor) {
             node->aux_mem = fwd_kernel.tmp_tensor->v;
+            DAO_INFO("N%u, tmp-P %p, aux_storage_size = %lu, size=%u, v %p", i, fwd_kernel.tmp_tensor, node->aux_storage_size(), fwd_kernel.tmp_tensor->d.size(), fwd_kernel.tmp_tensor->v);
         }
 
         for(auto idx: node->args) {
@@ -429,10 +452,11 @@ void Engine::run_backward(Instruction& inst) {
         auto& ainode = cg->nodes[arg];
 
         if (node->forward_inplaced()) node_fx->v = nfxs[node->args[0]]->v;
-        if (ainode->forward_inplaced()) node_dEdxai->v = ndEdfs[ainode->args[0]]->v;
+        if (ainode->backward_inplaced()) node_dEdxai->v = ndEdfs[ainode->args[0]]->v;
         if (node->aux_storage_size()) node->aux_mem = fwd_kernelss[inst.idx][bwd_kernel.fx_idx].tmp_tensor->v;
 
         if (debug_mode) {
+            assert(!node->backward_inplaced());
             for (auto arg: node->args) {
                 auto xnode = cg->nodes[arg];
                 DAO_ASSERT(nfxs[arg]->v, "nfxs[xnode]->v is nullptr");
@@ -440,7 +464,7 @@ void Engine::run_backward(Instruction& inst) {
             }
             DAO_ASSERT(allocator.check_on_gpu(node->forward_inplaced()?nfxs[node->args[0]]:node_fx), "node_fx.v is nullptr");
             DAO_ASSERT(bwd_kernel.fx_idx == ndEdfs.size() - 1 || allocator.check_on_gpu(node_dEdfx), "node_dEdfx.v is nullptr");
-            DAO_ASSERT(allocator.check_on_gpu(node->backward_inplaced()?ndEdfs[cg->nodes[arg]->args[0]]:node_dEdxai), "node_dEdxai.v is nullptr");
+            DAO_ASSERT(allocator.check_on_gpu(ainode->backward_inplaced()?ndEdfs[ainode->args[0]]:node_dEdxai), "node_dEdxai.v is nullptr");
             DAO_ASSERT(node_dEdfx->v && node_dEdxai->v, "node_dEdfx->v && node_dEdxai->v");
             DAO_INFO_LEVEL(1, "DAO BWD %u %p = %s", bwd_kernel.ai, node_dEdxai->v, node->as_dummy_string().c_str());
         }
@@ -474,9 +498,12 @@ void Engine::symbolic_update() {
     auto& upd_kernels = upd_kernelss.back();
     bool old_enabled = enabled;
     enabled = true;
-    const auto& params = trainer->model->parameters_list();
-    const auto& lparams = trainer->model->lookup_parameters_list();
-    const float gscale = trainer->clip_gradients();
+    const auto& params = trainer->model->updated_parameters_list();
+    const auto& lparams = trainer->model->updated_lookup_parameters_list();
+    // const float gscale = trainer->clip_gradients();
+    // DAO_INFO_LEVEL(0, "gscale = %f", gscale);
+    /** TODO: add weight decay*/ 
+    const float gscale = 1.0f;
     for (size_t i = 0; i < params.size(); ++i) {
         auto& param = params[i];
         assert(param->updated);
@@ -491,7 +518,7 @@ void Engine::symbolic_update() {
         }
         else {
             if (debug_mode)
-                DAO_WARNING("param[%u] is not updated", i);
+                DAO_WARNING("%s is not updated", param->name.c_str());
         }
     }
     for (size_t i = 0; i < lparams.size(); ++i) {
@@ -507,7 +534,8 @@ void Engine::symbolic_update() {
             upd_kernels.push_back(std::move(upd_kernel));   
         }
         else {
-            DAO_WARNING("lparam[%u] is not updated", i);
+            if (debug_mode)
+                DAO_WARNING("%s is not updated", lparam->name.c_str();
         }
     }
 

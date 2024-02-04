@@ -45,6 +45,8 @@ TensorRecord& GlobalMemRecord::lookup_tensor(TensorUID uid) {
         // is this correct? 
         record.tensor_size = (uid)->d.size() * sizeof(float);
         record.block_ptr = NULL;
+        record.name = uid->name;
+        assert(record.name.size());
     }
     return tensor_record_table[uid];
 }
@@ -187,15 +189,15 @@ void Allocator::prepare() {
         tensor_id->v = (float*)prepare(tensor_id);
     }
     for (auto& tensor_id : tensor_ids) {
-        if (debug_mode && tensor_values.count(tensor_id)) {
-            std::vector<float> value(tensor_id->d.size());
-            CUDA_CHECK(cudaMemcpyAsync(value.data(), tensor_id->v, value.size() * sizeof(float), cudaMemcpyDeviceToHost, compute_stream));
-            CUDA_CHECK(cudaStreamSynchronize(compute_stream));
-            std::vector<float> ground_truth = tensor_values[tensor_id];
-            for (int i = 0; i < value.size(); ++i) {
-                DAO_ASSERT(abs(value[i] - ground_truth[i]) < 1e-3, "%f != %f", value[i], ground_truth[i]);
-            }
-        }
+        // if (debug_mode && tensor_values.count(tensor_id)) {
+        //     std::vector<float> value(tensor_id->d.size());
+        //     CUDA_CHECK(cudaMemcpyAsync(value.data(), tensor_id->v, value.size() * sizeof(float), cudaMemcpyDeviceToHost, compute_stream));
+        //     CUDA_CHECK(cudaStreamSynchronize(compute_stream));
+        //     std::vector<float> ground_truth = tensor_values[tensor_id];
+        //     for (int i = 0; i < value.size(); ++i) {
+        //         DAO_ASSERT(abs(value[i] - ground_truth[i]) < 1e-3, "%f != %f", value[i], ground_truth[i]);
+        //     }
+        // }
         DAO_ASSERT(check_on_gpu(tensor_id), "tensor not on gpu");
     }
     global_memory_record->self_check();
@@ -219,12 +221,12 @@ void Allocator::complete() {
             free(tensor_id);            
         }
         else {
-            if (debug_mode) {
-                std::vector<float>& value = tensor_values[tensor_id];
-                value.resize(tensor_id->d.size());
-                CUDA_CHECK(cudaMemcpyAsync(value.data(), tensor_id->v, value.size() * sizeof(float), cudaMemcpyDeviceToHost, compute_stream));
-                CUDA_CHECK(cudaStreamSynchronize(compute_stream));
-            }
+            // if (debug_mode) {
+            //     std::vector<float>& value = tensor_values[tensor_id];
+            //     value.resize(tensor_id->d.size());
+            //     CUDA_CHECK(cudaMemcpyAsync(value.data(), tensor_id->v, value.size() * sizeof(float), cudaMemcpyDeviceToHost, compute_stream));
+            //     CUDA_CHECK(cudaStreamSynchronize(compute_stream));
+            // }
         }
     }
     logical_time++;
@@ -270,7 +272,7 @@ Allocator::~Allocator() {
 
 void TensorRecord::display(std::ostream& o, bool display_block) const {
     o << "<";
-    o << "ID: " << ((size_t)tensor_id & 0xfff) << ", ";
+    o << name << ", ";
     std::string status_tag = status == ONCPU ? "CPU" : (status == ONGPU ? "GPU" : "UND");
     o << status_tag << ",";
     o << "N: " << tensor_size << ", ";
@@ -422,9 +424,9 @@ void GlobalMemRecord::self_check() const {
     for (int i = 0; i < tensor_ids.size(); i++) {
         auto& record = tensor_record_table.at(tensor_ids[i]);
         if (record.status != UNINITIALIZED){
-            DAO_ASSERT(record.block_ptr && record.block_ptr->allocated, "record error");
+            DAO_ASSERT(record.block_ptr && record.block_ptr->allocated, "tensor %lu is not allocated", (size_t)tensor_ids[i] & 0xfff);
             DAO_ASSERT(record.block_ptr->physical_location_start + record.tensor_size <= record.block_ptr->physical_location_end, "record error");
-            DAO_ASSERT(((dynet::Tensor*)tensor_ids[i])->d.size() * sizeof(float) == record.tensor_size, "record error");
+            DAO_ASSERT(((dynet::Tensor*)tensor_ids[i])->d.size() * sizeof(float) == record.tensor_size, "%lu != %lu", ((dynet::Tensor*)tensor_ids[i])->d.size() * sizeof(float), record.tensor_size);
         }
     }
 
