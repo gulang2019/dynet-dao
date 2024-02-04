@@ -171,10 +171,10 @@ Trainer::~Trainer() {}
 
 void Trainer::rescale_and_reset_weight_decay() {
   const float weight_decay = model->get_weight_decay().current_weight_decay();
-  for (auto p : model->parameters_list())
+  for (auto p : model->updated_parameters_list())
     if (p->is_updated())
       p->scale_parameters(weight_decay);
-  for (auto p : model->lookup_parameters_list())
+  for (auto p : model->updated_lookup_parameters_list())
     if (p->is_updated())
       p->scale_parameters(weight_decay);
   model->get_weight_decay().reset_weight_decay();
@@ -203,8 +203,8 @@ void Trainer::update_epoch(real r) {
 
 // this calls the rule-specific updates over all updated parameters
 void Trainer::update() {
-  const auto & params = model->parameters_list();
-  const auto & lparams = model->lookup_parameters_list();
+  const auto & params = model->updated_parameters_list();
+  const auto & lparams = model->updated_lookup_parameters_list();
 
   // Allocate if necessary
   if(aux_allocated < params.size()) {
@@ -280,6 +280,7 @@ void Trainer::update() {
 }
 
 void Trainer::restart(real lr) {
+    if(DAO::use_dao) DAO_ERROR("restart is not supported now");
     this->learning_rate = lr;
     this->restart();
 }
@@ -320,8 +321,8 @@ void Trainer::save(std::ostream& os)
 
 void Trainer::populate(std::istream& is)
 {
-    const auto& params = model->parameters_list();
-    const auto& lparams = model->lookup_parameters_list();
+    const auto& params = model->updated_parameters_list();
+    const auto& lparams = model->updated_lookup_parameters_list();
     // Allocate if necessary
     if(aux_allocated < params.size())
         aux_allocated = alloc_impl();
@@ -362,10 +363,10 @@ void Trainer::populate(std::istream& is)
 
         unsigned ma_np, ma_nlp;
         read_trainer_header(is, "#MA#", &ma_np, &ma_nlp);
-        if (ma_np > model->parameters_list().size())
+        if (ma_np > model->updated_parameters_list().size())
             DYNET_RUNTIME_ERR("Size mismatch")
 
-        if (ma_nlp > model->lookup_parameters_list().size())
+        if (ma_nlp > model->updated_lookup_parameters_list().size())
             DYNET_RUNTIME_ERR("Size mismatch")
 
         read_trainer_params(is, ma_p, ma_np);
@@ -563,8 +564,8 @@ void Trainer::swap_params_to_moving_average(bool save_weights, bool bias_correct
     ma_params_swapped = true;
     ma_params_saved = save_weights;
 
-    const auto& params = model->parameters_list();
-    const auto& lparams = model->lookup_parameters_list();
+    const auto& params = model->updated_parameters_list();
+    const auto& lparams = model->updated_lookup_parameters_list();
 
     // check memory (shadow params are automatically initialized to zero)
     if (ma_p.size() < params.size())
@@ -606,8 +607,8 @@ void Trainer::swap_params_to_weights()
         DYNET_RUNTIME_ERR("Weights have not been save.")
     ma_params_swapped = false;
 
-    const auto& params = model->parameters_list();
-    const auto& lparams = model->lookup_parameters_list();
+    const auto& params = model->updated_parameters_list();
+    const auto& lparams = model->updated_lookup_parameters_list();
 
     // if the number of the parameters has changed,
     // they are ignored.
@@ -639,15 +640,15 @@ DYNET_TRAINER_INST_DEV_IMPL(SimpleSGDTrainer)
 
 #ifndef __CUDACC__
 void SimpleSGDTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
+  auto & p = model->updated_parameters_list()[idx];
   update_rule(gscale, {&p->values, &p->g});
 }
 void SimpleSGDTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->values[lidx], &p->grads[lidx]});
 }
 void SimpleSGDTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->all_values, &p->all_grads});
 }
 #endif
@@ -663,15 +664,15 @@ DYNET_TRAINER_INST_DEV_IMPL(CyclicalSGDTrainer)
 
 #ifndef __CUDACC__
 void CyclicalSGDTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
+  auto & p = model->updated_parameters_list()[idx];
   update_rule(gscale, {&p->values, &p->g});
 }
 void CyclicalSGDTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->values[lidx], &p->grads[lidx]});
 }
 void CyclicalSGDTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->all_values, &p->all_grads});
 }
 
@@ -689,15 +690,15 @@ DYNET_TRAINER_INST_DEV_IMPL(MomentumSGDTrainer)
 
 #ifndef __CUDACC__
 void MomentumSGDTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
+  auto & p = model->updated_parameters_list()[idx];
   update_rule(gscale, {&p->values, &p->g, &vp[idx].h});
 }
 void MomentumSGDTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &vlp[idx].h[lidx]});
 }
 void MomentumSGDTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->all_values, &p->all_grads, &vlp[idx].all_h});
 }
 unsigned MomentumSGDTrainer::alloc_impl() {
@@ -756,15 +757,15 @@ DYNET_TRAINER_INST_DEV_IMPL(AdagradTrainer)
 
 #ifndef __CUDACC__
 void AdagradTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
+  auto & p = model->updated_parameters_list()[idx];
   update_rule(gscale, {&p->values, &p->g, &vp[idx].h});
 }
 void AdagradTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &vlp[idx].h[lidx]});
 }
 void AdagradTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->all_values, &p->all_grads, &vlp[idx].all_h});
 }
 unsigned AdagradTrainer::alloc_impl() {
@@ -825,15 +826,15 @@ DYNET_TRAINER_INST_DEV_IMPL(AdadeltaTrainer)
 
 #ifndef __CUDACC__
 void AdadeltaTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
+  auto & p = model->updated_parameters_list()[idx];
   update_rule(gscale, {&p->values, &p->g, &hg[idx].h, &hd[idx].h});
 }
 void AdadeltaTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &hlg[idx].h[lidx], &hld[idx].h[lidx]});
 }
 void AdadeltaTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->all_values, &p->all_grads, &hlg[idx].all_h, &hld[idx].all_h});
 }
 unsigned AdadeltaTrainer::alloc_impl() {
@@ -909,15 +910,15 @@ DYNET_TRAINER_INST_DEV_IMPL(RMSPropTrainer)
 
 #ifndef __CUDACC__
 void RMSPropTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
+  auto & p = model->updated_parameters_list()[idx];
   update_rule(gscale, {&p->values, &p->g, &hmsg[idx].h});
 }
 void RMSPropTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &hlmsg[idx].h[lidx]});
 }
 void RMSPropTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->all_values, &p->all_grads, &hlmsg[idx].all_h});
 }
 unsigned RMSPropTrainer::alloc_impl() {
@@ -978,15 +979,15 @@ DYNET_TRAINER_INST_DEV_IMPL(AdamTrainer)
 
 #ifndef __CUDACC__
 void AdamTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
+  auto & p = model->updated_parameters_list()[idx];
   update_rule(gscale, {&p->values, &p->g, &m[idx].h, &v[idx].h});
 }
 void AdamTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &lm[idx].h[lidx], &lv[idx].h[lidx]});
 }
 void AdamTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->all_values, &p->all_grads, &lm[idx].all_h, &lv[idx].all_h});
 }
 unsigned AdamTrainer::alloc_impl() {
@@ -1058,15 +1059,15 @@ DYNET_TRAINER_INST_DEV_IMPL(AmsgradTrainer)
 
 #ifndef __CUDACC__
 void AmsgradTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
+  auto & p = model->updated_parameters_list()[idx];
   update_rule(gscale, {&p->values, &p->g, &m[idx].h, &v[idx].h, &vhat[idx].h});
 }
 void AmsgradTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &lm[idx].h[lidx], &lv[idx].h[lidx], &lvhat[idx].h[lidx]});
 }
 void AmsgradTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->all_values, &p->all_grads, &lm[idx].all_h, &lv[idx].all_h, &lvhat[idx].all_h});
 }
 unsigned AmsgradTrainer::alloc_impl() {
@@ -1151,15 +1152,15 @@ EGTrainer::EGTrainer(ParameterCollection& mod, real learning_rate, real mom, rea
   default_device->allocate_tensor(DeviceMempool::PS, meg);
 }
 void EGTrainer::update_params(real gscale, size_t idx) {
-  auto & p = model->parameters_list()[idx];
+  auto & p = model->updated_parameters_list()[idx];
   update_rule(gscale, {&p->values, &p->g, &hp[idx].h, &meg, &zeg});
 }
 void EGTrainer::update_lookup_params(real gscale, size_t idx, size_t lidx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->values[lidx], &p->grads[lidx], &hlp[idx].h[lidx], &meg, &zeg});
 }
 void EGTrainer::update_lookup_params(real gscale, size_t idx) {
-  auto & p = model->lookup_parameters_list()[idx];
+  auto & p = model->updated_lookup_parameters_list()[idx];
   update_rule(gscale, {&p->all_grads, &p->all_grads, &hlp[idx].all_h, &meg, &zeg});
 }
 unsigned EGTrainer::alloc_impl() {

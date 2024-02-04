@@ -17,6 +17,10 @@
 #endif
 #include "third_party/topk.h"
 
+#ifdef USE_DAO 
+#include <DAO/DAO.h>
+#endif 
+
 using namespace std;
 
 namespace dynet {
@@ -120,6 +124,8 @@ vector<real> as_scale_vector(const Tensor& v, float a) {
 }
 
 float TensorTools::access_element(const Tensor& v, int index) {
+  DAO_INFO_LEVEL(1, "TensorsTools::access_element called");
+  if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
   float ret = 0.;
   if (v.device->type == DeviceType::CPU) {
     return v.v[index];
@@ -134,6 +140,8 @@ float TensorTools::access_element(const Tensor& v, int index) {
 }
 
 float TensorTools::access_element(const Tensor& v, const Dim& index) {
+  DAO_INFO_LEVEL(1, "TensorsTools::access_element called");
+  if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
   if (v.device->type == DeviceType::CPU) {
     return mat(v)(index[0], index[1]);
 #if HAVE_CUDA
@@ -148,6 +156,8 @@ float TensorTools::access_element(const Tensor& v, const Dim& index) {
 }
 
 void TensorTools::set_element(const Tensor& v, int index, float value) {
+  DAO_INFO_LEVEL(1, "TensorsTools::set_element called");
+  if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
   if (v.device->type == DeviceType::CPU) {
     v.v[index] = value;
 #if HAVE_CUDA
@@ -159,6 +169,8 @@ void TensorTools::set_element(const Tensor& v, int index, float value) {
 }
 
 void TensorTools::copy_element(const Tensor& l, int lindex, Tensor& r, int rindex) {
+  DAO_INFO_LEVEL(1, "TensorsTools::copy_element called");
+  if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
   if (l.device->type == DeviceType::CPU) {
     if (r.device->type == DeviceType::CPU) {
       r.v[rindex] = l.v[lindex];
@@ -189,10 +201,14 @@ void TensorTools::copy_element(const Tensor& l, int lindex, Tensor& r, int rinde
 }
 
 void TensorTools::set_elements(const Tensor& v, const vector<float>& vec) {
+  DAO_INFO_LEVEL(1, "TensorsTools::set_elements called");
   if (v.device->type == DeviceType::CPU) {
     memcpy(v.v, &vec[0], sizeof(real) * vec.size());
 #if HAVE_CUDA
   } else if (v.device->type == DeviceType::GPU) {
+    if (DAO::use_dao) {
+      const_cast<Tensor*>(&v)->v = (float*)DAO::dao_allocator.prepare(const_cast<Tensor*>(&v), true);
+    }
     CUDA_CHECK(cudaSetDevice(((Device_GPU*)v.device)->cuda_device_id));
     cudaMemcpyAsync(v.v, &vec[0], sizeof(real) * vec.size(), cudaMemcpyHostToDevice);
 #endif
@@ -200,6 +216,8 @@ void TensorTools::set_elements(const Tensor& v, const vector<float>& vec) {
 }
 
 void TensorTools::copy_elements(Tensor& v, const Tensor& v_src) {
+  DAO_INFO_LEVEL(1, "TensorsTools::copy_elements called");
+  if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
   if (v.device->type == DeviceType::CPU) {
     if (v_src.device->type == DeviceType::CPU) {
       memcpy(v.v, v_src.v, sizeof(real) * v.d.size());
@@ -229,6 +247,7 @@ void TensorTools::copy_elements(Tensor& v, const Tensor& v_src) {
 }
 
 void TensorTools::zero(Tensor& d) {
+  DAO_INFO_LEVEL(1, "TensorsTools::zero called");
 #if HAVE_CUDA
   if (d.device->type == DeviceType::GPU) {
     CUDA_CHECK(cudaSetDevice(((Device_GPU*)d.device)->cuda_device_id));
@@ -238,6 +257,8 @@ void TensorTools::zero(Tensor& d) {
 }
 
 void TensorTools::identity(Tensor& val) {
+  DAO_INFO_LEVEL(1, "TensorsTools::identity called");
+  if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
   if (val.d.nd != 2 || val.d[0] != val.d[1])
     throw std::runtime_error("Attempt to set a tensor that is not a square matrix to identity");
   size_t pos = 0;
@@ -259,6 +280,7 @@ void TensorTools::identity(Tensor& val) {
 }
 
 void TensorTools::randomize_bernoulli(Tensor& val, real p, real scale) {
+  DAO_INFO_LEVEL(1, "TensorsTools::randomize_bernoulli called");
   bernoulli_distribution distribution(p);
   auto b = [&] {return distribution(*rndeng) * scale;};
   if (val.device->type == DeviceType::CPU) {
@@ -275,12 +297,14 @@ void TensorTools::randomize_bernoulli(Tensor& val, real p, real scale) {
 }
 
 void TensorTools::randomize_normal(Tensor& val, real mean, real stddev) {
+  DAO_INFO_LEVEL(1, "TensorsTools::randomize_normal called");
   normal_distribution<real> distribution(mean, stddev);
   auto b = [&] {return distribution(*rndeng);};
   if (val.device->type == DeviceType::CPU) {
     generate(val.v, val.v + val.d.size(), b);
 #if HAVE_CUDA
   } else if (val.device->type == DeviceType::GPU) {
+    if (DAO::use_dao) val.v = (float*)DAO::dao_allocator.prepare(&val, true);
     CUDA_CHECK(cudaSetDevice(((Device_GPU*)val.device)->cuda_device_id));
     CURAND_CHECK(curandGenerateNormal(((Device_GPU*)val.device)->curandeng, val.v, val.d.size(), mean, stddev));
 #endif
@@ -288,12 +312,14 @@ void TensorTools::randomize_normal(Tensor& val, real mean, real stddev) {
 }
 
 void TensorTools::randomize_uniform(Tensor& val, real left, real right) {
+  DAO_INFO_LEVEL(1, "TensorsTools::randomize_uniform called");
   uniform_real_distribution<real> distribution(left, right);
   auto b = [&] {return distribution(*rndeng);};
   if (val.device->type == DeviceType::CPU) {
     generate(val.v, val.v + val.d.size(), b);
 #if HAVE_CUDA
   } else if (val.device->type == DeviceType::GPU) {
+    if (DAO::use_dao) val.v = (float*)DAO::dao_allocator.prepare(&val, true);
     CUDA_CHECK(cudaSetDevice(((Device_GPU*)val.device)->cuda_device_id));
     CURAND_CHECK(curandGenerateUniform(((Device_GPU*)val.device)->curandeng, val.v, val.d.size()));
     if(left != 0 || right != 1)
@@ -303,6 +329,7 @@ void TensorTools::randomize_uniform(Tensor& val, real left, real right) {
 }
 
 void TensorTools::randomize_orthonormal(Tensor& val, real scale) {
+  DAO_INFO_LEVEL(1, "TensorsTools::randomize_orthonormal called");
   if (val.d.nd != 2 || val.d[0] != val.d[1])
     throw std::runtime_error("Attempt to set a tensor that is not a square matrix to an orthogonal matrix");
   if (val.device->type == DeviceType::CPU) {
@@ -311,6 +338,7 @@ void TensorTools::randomize_orthonormal(Tensor& val, real scale) {
     mat(val) = scale * svd.matrixU();
 #ifdef HAVE_CUDA
   } else if (val.device->type == DeviceType::GPU) {
+    if (DAO::use_dao) val.v = (float*)DAO::dao_allocator.prepare(&val, true);
     DYNET_NO_CUDA_IMPL_ERROR("Orthonormal initialization");
     // TODO: The following should work, but for some reason it isn't working
     // float* t = new float[val.d.size()];
@@ -359,6 +387,7 @@ template void TensorTools::accumulate_dev<Device_CPU>(const Device_CPU & dev, Te
 #ifdef HAVE_CUDA
 extern template void TensorTools::accumulate_dev<Device_GPU>(const Device_GPU & dev, Tensor& v, const Tensor& v_src);
 void TensorTools::accumulate(Tensor& v, const Tensor& v_src) {
+  DAO_INFO_LEVEL(1, "TensorsTools::accumulate called");
   if (v.device->type == DeviceType::CPU) { return accumulate_dev(*(const Device_CPU*)v.device, v, v_src); }
   else if (v.device->type == DeviceType::GPU) {
     CUDA_CHECK(cudaSetDevice(((Device_GPU*)v.device)->cuda_device_id));
@@ -384,8 +413,11 @@ template void TensorTools::constant_dev<Device_CPU>(const Device_CPU & dev, Tens
 #ifdef HAVE_CUDA
 extern template void TensorTools::constant_dev<Device_GPU>(const Device_GPU & dev, Tensor& d, float c);
 void TensorTools::constant(Tensor& d, float c) {
+  DAO_INFO_LEVEL(1, "TensorsTools::constant called");
   if (d.device->type == DeviceType::CPU) { return constant_dev(*(const Device_CPU*)d.device, d, c); }
-  else if (d.device->type == DeviceType::GPU) { return constant_dev(*(const Device_GPU*)d.device, d, c); }
+  else if (d.device->type == DeviceType::GPU) { 
+    if (DAO::use_dao) d.v = (float*)DAO::dao_allocator.prepare(&d, true);
+    return constant_dev(*(const Device_GPU*)d.device, d, c); }
   else { throw std::runtime_error("Bad device type"); }
 }
 #else
@@ -407,8 +439,11 @@ template void TensorTools::clip_dev<Device_CPU>(const Device_CPU & dev, Tensor& 
 #ifdef HAVE_CUDA
 extern template void TensorTools::clip_dev<Device_GPU>(const Device_GPU & dev, Tensor& d, float left, float right);
 void TensorTools::clip(Tensor& d, float left, float right) {
+  DAO_INFO_LEVEL(1, "TensorsTools::clip called");
   if (d.device->type == DeviceType::CPU) { return clip_dev(*(const Device_CPU*)d.device, d, left, right); }
-  else if (d.device->type == DeviceType::GPU) { return clip_dev(*(const Device_GPU*)d.device, d, left, right); }
+  else if (d.device->type == DeviceType::GPU) { 
+    if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
+    return clip_dev(*(const Device_GPU*)d.device, d, left, right); }
   else { throw std::runtime_error("Bad device type"); }
 }
 #else
@@ -430,8 +465,11 @@ template void TensorTools::scale_dev<Device_CPU>(const Device_CPU & dev, Tensor&
 #ifdef HAVE_CUDA
 extern template void TensorTools::scale_dev<Device_GPU>(const Device_GPU & dev, Tensor& d, float a, float b);
 void TensorTools::scale(Tensor& d, float a, float b) {
+  DAO_INFO_LEVEL(1, "TensorsTools::scale called");
   if (d.device->type == DeviceType::CPU) { return scale_dev(*(const Device_CPU*)d.device, d, a, b); }
-  else if (d.device->type == DeviceType::GPU) { return scale_dev(*(const Device_GPU*)d.device, d, a, b); }
+  else if (d.device->type == DeviceType::GPU) { 
+    if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
+    return scale_dev(*(const Device_GPU*)d.device, d, a, b); }
   else { throw std::runtime_error("Bad device type"); }
 }
 #else
@@ -453,8 +491,11 @@ template void TensorTools::uniform_to_bernoulli_dev<Device_CPU>(const Device_CPU
 #ifdef HAVE_CUDA
 extern template void TensorTools::uniform_to_bernoulli_dev<Device_GPU>(const Device_GPU & dev, Tensor& d, float p);
 void TensorTools::uniform_to_bernoulli(Tensor& d, float p) {
+  DAO_INFO_LEVEL(1, "TensorsTools::uniform_to_bernoulli called");
   if (d.device->type == DeviceType::CPU) { return uniform_to_bernoulli_dev(*(const Device_CPU*)d.device, d, p); }
-  else if (d.device->type == DeviceType::GPU) { return uniform_to_bernoulli_dev(*(const Device_GPU*)d.device, d, p); }
+  else if (d.device->type == DeviceType::GPU) { 
+    if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
+    return uniform_to_bernoulli_dev(*(const Device_GPU*)d.device, d, p); }
   else { throw std::runtime_error("Bad device type"); }
 }
 #else
@@ -512,8 +553,11 @@ template void TensorTools::logsumexp_dev<Device_CPU>(const Device_CPU & dev, con
 #ifdef HAVE_CUDA
 extern template void TensorTools::logsumexp_dev<Device_GPU>(const Device_GPU & dev, const Tensor &x, Tensor &m, Tensor &z, unsigned d);
 void TensorTools::logsumexp(const Tensor &x, Tensor &m, Tensor &z, unsigned d) {
+  DAO_INFO_LEVEL(1, "TensorsTools::logsumexp called");
   if (x.device->type == DeviceType::CPU) { return logsumexp_dev(*(const Device_CPU*)x.device, x, m, z, d); }
-  else if (x.device->type == DeviceType::GPU) { return logsumexp_dev(*(const Device_GPU*)x.device, x, m, z, d); }
+  else if (x.device->type == DeviceType::GPU) { 
+    if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
+    return logsumexp_dev(*(const Device_GPU*)x.device, x, m, z, d); }
   else { throw std::runtime_error("Bad device type"); }
 }
 #else
@@ -579,8 +623,11 @@ template IndexTensor TensorTools::categorical_sample_log_prob_dev<Device_CPU>(co
 #ifdef HAVE_CUDA
 extern template IndexTensor TensorTools::categorical_sample_log_prob_dev<Device_GPU>(const Device_GPU & dev, const Tensor& d, unsigned dim, unsigned num);
 IndexTensor TensorTools::categorical_sample_log_prob(const Tensor& d, unsigned dim, unsigned num) {
+  DAO_INFO_LEVEL(1, "TensorsTools::categorical_sample_log_prob called");
   if (d.device->type == DeviceType::CPU) { return categorical_sample_log_prob_dev(*(const Device_CPU*)d.device, d, dim, num); }
-  else if (d.device->type == DeviceType::GPU) { return categorical_sample_log_prob_dev(*(const Device_GPU*)d.device, d, dim, num); }
+  else if (d.device->type == DeviceType::GPU) { 
+    if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
+    return categorical_sample_log_prob_dev(*(const Device_GPU*)d.device, d, dim, num); }
   else { throw std::runtime_error("Bad device type"); }
 }
 #else
@@ -627,8 +674,11 @@ template std::pair<Tensor, IndexTensor> TensorTools::topk_dev<Device_CPU>(const 
 #ifdef HAVE_CUDA
 extern template std::pair<Tensor, IndexTensor> TensorTools::topk_dev<Device_GPU>(const Device_GPU & dev, const Tensor& d, unsigned dim, unsigned num);
 std::pair<Tensor, IndexTensor> TensorTools::topk(const Tensor& d, unsigned dim, unsigned num) {
+  DAO_INFO_LEVEL(1, "TensorsTools::topk called");
   if(d.device->type == DeviceType::CPU) { return topk_dev(*(const Device_CPU*)d.device, d, dim, num); }
-  else if(d.device->type == DeviceType::GPU) { return topk_dev(*(const Device_GPU*)d.device, d, dim, num); }
+  else if(d.device->type == DeviceType::GPU) { 
+    if (DAO::use_dao) {DAO_ERROR("Not implemented yet");}
+    return topk_dev(*(const Device_GPU*)d.device, d, dim, num); }
   else { throw std::runtime_error("Bad device type"); }
 }
 #else

@@ -150,9 +150,9 @@ struct ParameterStorage : public ParameterStorageBase {
 protected:
   ParameterStorage() : updated(true), owner(nullptr) {}
   explicit ParameterStorage(const Dim& d, float scale,
-                            const std::string & name, Device *device); // initialize with a scale
+                            const std::string & name, Device *device, bool updated); // initialize with a scale
   explicit ParameterStorage(const Dim& d, const ParameterInit & init,
-                            const std::string & name, Device *device); // initialize with custom initializer
+                            const std::string & name, Device *device, bool updated); // initialize with custom initializer
 }; // struct ParameterStorage
 
 struct ParameterStorageCreator : public ParameterStorage {
@@ -264,7 +264,7 @@ struct LookupParameterStorage : public ParameterStorageBase {
 protected:
   LookupParameterStorage() : updated(true), all_updated(false), owner(nullptr) {}
   LookupParameterStorage(unsigned n, const Dim& d, const ParameterInit & init,
-                         const std::string & name, Device *device);
+                         const std::string & name, Device *device, bool updated);
 }; // struct LookupParameterStorage
 
 struct LookupParameterStorageCreator : public LookupParameterStorage {
@@ -473,8 +473,11 @@ struct ParameterCollectionStorage {
   float gradient_l2_norm() const;
 
   std::vector<std::shared_ptr<ParameterStorageBase>> all_params;
+  std::vector<std::shared_ptr<ParameterStorageBase>> all_updated_params;
   std::vector<std::shared_ptr<ParameterStorage>> params;
+  std::vector<std::shared_ptr<ParameterStorage>> updated_params;
   std::vector<std::shared_ptr<LookupParameterStorage>> lookup_params;
+  std::vector<std::shared_ptr<LookupParameterStorage>> updated_lookup_params;
 
   mutable float* gradient_norm_scratch;
   L2WeightDecay weight_decay;
@@ -521,6 +524,11 @@ public:
    * \brief Sets all gradients to zero
    */
   void reset_gradient();
+  /**
+   * \brief Set default trainable or not 
+  */
+ static void set_default_updated(bool status);
+ static bool default_updated; 
   // set scale to use custom initialization
   /**
    * \brief Add parameters to model and returns Parameter object
@@ -568,6 +576,19 @@ public:
    */
   Parameter add_parameters(const Dim& d, const ParameterInit & init,
                            const std::string & name = "", Device *device = dynet::default_device);
+  /**
+   * \brief Add parameters with custom initializer
+   *
+   * \param d Shape of the parameter
+   * \param init Custom initializer
+   * \param name Name of the parameter
+   * \param device Device placement for the parameter
+   * \param trainable Whether the parameter is trainable or not
+   *
+   * \return Parameter object to be used in the computation graph
+   */
+  Parameter add_parameters(const Dim& d, const ParameterInit & init,
+                           const std::string & name, Device *device, bool trainable);
   /**
    * \brief Get parameters base in current model
    *
@@ -647,11 +668,23 @@ public:
    */
   const std::vector<std::shared_ptr<ParameterStorage>>& parameters_list() const { return get_storage().params; }
   /**
+   * \brief Returns list of shared pointers to updated ParameterSorages
+   * \details You shouldn't need to use this
+   * \return List of shared pointers to ParameterSorages
+   */
+  const std::vector<std::shared_ptr<ParameterStorage>>& updated_parameters_list() const { return get_storage().updated_params; }
+  /**
    * \brief Returns list of pointers to LookupParameterSorages
    * \details You shouldn't need to use this
    * \return List of pointers to LookupParameterSorages
    */
   const std::vector<std::shared_ptr<LookupParameterStorage>>& lookup_parameters_list() const { return get_storage().lookup_params; }
+  /**
+   * \brief Returns list of pointers to updated LookupParameterSorages
+   * \details You shouldn't need to use this
+   * \return List of pointers to LookupParameterSorages
+   */
+  const std::vector<std::shared_ptr<LookupParameterStorage>>& updated_lookup_parameters_list() const { return get_storage().updated_lookup_params; }
 
   //
   //

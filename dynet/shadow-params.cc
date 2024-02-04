@@ -13,11 +13,13 @@ using namespace std;
 namespace dynet {
 
 ShadowParameters::ShadowParameters(const ParameterStorage& p) : h(p.values) {
+  h.name = p.name + "_h"; 
   p.device->allocate_tensor(DeviceMempool::PS, h);
   TensorTools::zero(h);
 }
 
 ShadowLookupParameters::ShadowLookupParameters(const LookupParameterStorage& lp) : all_h(lp.all_values) {
+  all_h.name = lp.name + "all_h"; 
   lp.device->allocate_tensor(DeviceMempool::PS, all_h);
   TensorTools::zero(all_h);
   initialize_lookups();
@@ -35,7 +37,7 @@ void ShadowLookupParameters::initialize_lookups() {
 }
 
 void allocate_shadow_parameters(const ParameterCollection& m, unsigned allocated, vector<ShadowParameters>& target) {
-  auto& params = m.parameters_list();
+  auto& params = m.updated_parameters_list();
   vector<shared_ptr<ParameterStorage>> to_allocate(params.begin() + allocated, params.end());
   vector<ShadowParameters> v;
   target.reserve(params.size());
@@ -44,7 +46,7 @@ void allocate_shadow_parameters(const ParameterCollection& m, unsigned allocated
 }
 
 void allocate_shadow_lookup_parameters(const ParameterCollection& m, unsigned allocated, vector<ShadowLookupParameters>& target) {
-  auto& params = m.lookup_parameters_list();
+  auto& params = m.updated_lookup_parameters_list();
   vector<shared_ptr<LookupParameterStorage>> to_allocate(params.begin() + allocated, params.end());
   target.reserve(params.size());
   for (auto& p : to_allocate)

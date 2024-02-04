@@ -2,6 +2,9 @@
 #include "dynet/tensor.h"
 #include "dynet/except.h"
 #include "dynet/str-util.h"
+#ifdef USE_DAO 
+#include <DAO/DAO.h>
+#endif 
 
 #include <algorithm>
 
@@ -113,7 +116,8 @@ void TextFileSaver::save(const ParameterStorage & p,
   // FLOAT32_PRECISION, and length of ZZZ is FLOAT32_EXPONENT. We additionally
   // add a newline at the end of the line, so the total size is as below.
   size_t strsize = static_cast<size_t>(p.dim.size()) * (FLOAT32_PRECISION + FLOAT32_EXPONENT + 6) + 1;
-  bool zero_grad = grad_is_zero(p);
+  // If the parameter is not trained or the gradient is zero, we only need to save the values.
+  bool zero_grad = !p.is_updated() || grad_is_zero(p);
   if(zero_grad)
     datastream << strsize << " ZERO_GRAD";
   else
@@ -127,7 +131,8 @@ void TextFileSaver::save(const LookupParameterStorage & p,
                          const std::string & key) {
   datastream << "#LookupParameter# " << (key.size() > 0 ? key : p.name) << ' ' << p.all_dim << ' ';
   size_t strsize = static_cast<size_t>(p.all_dim.size()) * (FLOAT32_PRECISION + 8) + 1;
-  bool zero_grad = grad_is_zero(p);
+  // If the parameter is not trained or the gradient is zero, we only need to save the values.
+  bool zero_grad = !p.is_updated() || grad_is_zero(p);
   if(zero_grad)
     datastream << strsize << " ZERO_GRAD";
   else
@@ -156,6 +161,7 @@ void TextFileLoader::populate(ParameterCollection & model, const std::string & k
   std::string key_ = key;
   if (key_.size() != 0 && key_.back() != '/') key_ += "/";
   while(std::getline(datastream, line)) {
+    bool has_grad = false;
     read_param_header(line, type, name, dim, byte_count, zero_grad);
     // Skip ones that don't match
     if(key.size() != 0 && name.substr(0, key_.size()) != key_) {
@@ -173,12 +179,13 @@ void TextFileLoader::populate(ParameterCollection & model, const std::string & k
           break;
         std::cerr << "Name mismatch, skip loading /model" << model_param->name << '\n';
       }
-      ParameterStorage & param = *storage.params[param_id++];      
+      ParameterStorage & param = *storage.params[param_id++];     
       if(param.dim != dim)
         DYNET_RUNTIME_ERR("Dimensions of parameter " << name << " looked up from file (" << dim << 
                             ") do not match parameters to be populated (" << param.dim << ")");
       value_t = &param.values;
       grad_t = &param.g;
+      has_grad = param.is_updated();
     // Load a lookup parameter
     } else if(type == "#LookupParameter#") {
       values.resize(dim.size());
@@ -196,6 +203,7 @@ void TextFileLoader::populate(ParameterCollection & model, const std::string & k
                             ") do not match parameters to be populated (" << param.all_dim << ")");
       value_t = &param.all_values;
       grad_t = &param.all_grads;
+      has_grad = param.is_updated();
     } else {
       DYNET_RUNTIME_ERR("Bad parameter specification in model: " << line);
     }
@@ -203,9 +211,12 @@ void TextFileLoader::populate(ParameterCollection & model, const std::string & k
     TensorTools::set_elements(*value_t, values);
     if(!zero_grad){
       { std::getline(datastream, line); std::istringstream iss(line); iss >> values; }
-      TensorTools::set_elements(*grad_t, values);
-    } else {
-      TensorTools::zero(*grad_t);
+      if (has_grad) TensorTools::set_elements(*grad_t, values);
+    } else  {
+      if (has_grad) {
+        if (DAO::use_dao) {grad_t->v = (float*)DAO::dao_allocator.prepare(grad_t, true);}
+        TensorTools::zero(*grad_t);
+      }
     }
   }
   if(param_id != storage.params.size() || lookup_id != storage.lookup_params.size())
@@ -234,9 +245,12 @@ void TextFileLoader::populate(Parameter & param,
       TensorTools::set_elements(param.get_storage().values, values);
       if(!zero_grad){
         { std::getline(datastream, line); std::istringstream iss(line); iss >> values; }
-        TensorTools::set_elements(param.get_storage().g, values);
+        if(param.is_updated()) TensorTools::set_elements(param.get_storage().g, values);
       } else {
-        TensorTools::zero(param.get_storage().g);
+        if(param.is_updated()) {
+          if (DAO::use_dao) {param.get_storage().g.v = (float*)DAO::dao_allocator.prepare(&param.get_storage().g, true);}
+          TensorTools::zero(param.get_storage().g);
+        }
       }
       return;
     } else {
@@ -267,9 +281,11 @@ void TextFileLoader::populate(LookupParameter & lookup_param,
       TensorTools::set_elements(lookup_param.get_storage().all_values, values);
       if(!zero_grad){
         { std::getline(datastream, line); std::istringstream iss(line); iss >> values; }
-        TensorTools::set_elements(lookup_param.get_storage().all_grads, values);
+        if(lookup_param.is_updated()) TensorTools::set_elements(lookup_param.get_storage().all_grads, values);
       } else {
-        TensorTools::zero(lookup_param.get_storage().all_grads);
+        if(lookup_param.is_updated()) {
+          if (DAO::use_dao) {lookup_param.get_storage().all_grads.v = (float*)DAO::dao_allocator.prepare(&lookup_param.get_storage().all_grads, true);}
+          TensorTools::zero(lookup_param.get_storage().all_grads);}
       }
       return;
     } else {
@@ -302,6 +318,7 @@ Parameter TextFileLoader::load_param(ParameterCollection & model,
         { std::getline(datastream, line); std::istringstream iss(line); iss >> values; }
         TensorTools::set_elements(param.get_storage().g, values);
       } else {
+        if (DAO::use_dao) {param.get_storage().g.v = (float*)DAO::dao_allocator.prepare(&param.get_storage().g, true);}
         TensorTools::zero(param.get_storage().g);
       }
       return param;
@@ -336,6 +353,7 @@ LookupParameter TextFileLoader::load_lookup_param(ParameterCollection & model,
         { std::getline(datastream, line); std::istringstream iss(line); iss >> values; }
         TensorTools::set_elements(lookup_param.get_storage().all_grads, values);
       } else {
+        if (DAO::use_dao) {lookup_param.get_storage().all_grads.v = (float*)DAO::dao_allocator.prepare(&lookup_param.get_storage().all_grads, true);}
         TensorTools::zero(lookup_param.get_storage().all_grads);
       }
       return lookup_param;

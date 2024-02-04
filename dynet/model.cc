@@ -56,8 +56,8 @@ namespace dynet {
 
 ParameterStorageBase::~ParameterStorageBase() {}
 
-ParameterStorage::ParameterStorage(const Dim& d, float scale, const std::string & name, Device *dev)
-    : name(name), dim(d), updated(true), nonzero_grad(false), owner(nullptr), device(dev) {
+ParameterStorage::ParameterStorage(const Dim& d, float scale, const std::string & name, Device *dev, bool updated)
+    : name(name), dim(d), updated(updated), nonzero_grad(false), owner(nullptr), device(dev) {
   DYNET_ARG_CHECK(default_device != nullptr,
                   "Attempting to define parameters before initializing DyNet. Be sure to call dynet::initialize() before defining your model.");
 #if HAVE_CUDA
@@ -68,9 +68,14 @@ ParameterStorage::ParameterStorage(const Dim& d, float scale, const std::string 
 #endif
   values.d = g.d = d;
   values.device = g.device = device;
+  values.name = name + "_values";
   device->allocate_tensor(DeviceMempool::PS, values);
-  device->allocate_tensor(DeviceMempool::PS, g);
-  TensorTools::zero(g);
+  if (updated)
+  {
+    g.name = name + "_gradients";
+    device->allocate_tensor(DeviceMempool::PS, g);
+    TensorTools::zero(g);
+  }
   if (scale == 0.0f) {
     ParameterInitGlorot init;
     init.initialize_params(values);
@@ -81,8 +86,8 @@ ParameterStorage::ParameterStorage(const Dim& d, float scale, const std::string 
 }
 
 ParameterStorage::ParameterStorage(const Dim& d, const ParameterInit & init,
-                                   const std::string & name, Device *dev)
-    : name(name), dim(d), updated(true), nonzero_grad(false), owner(nullptr), device(dev) {
+                                   const std::string & name, Device *dev, bool updated)
+    : name(name), dim(d), updated(updated), nonzero_grad(false), owner(nullptr), device(dev) {
   DYNET_ARG_CHECK(default_device != nullptr,
                   "Attempting to define parameters before initializing DyNet. Be sure to call dynet::initialize() before defining your model.");
 #if HAVE_CUDA
@@ -91,17 +96,23 @@ ParameterStorage::ParameterStorage(const Dim& d, const ParameterInit & init,
     CUDA_CHECK(cudaSetDevice(gpu_dev->cuda_device_id));
   }
 #endif
-  values.d = g.d = d;
+  values.d = d;
   values.device = g.device = device;
+  values.name = name + "_values";
   device->allocate_tensor(DeviceMempool::PS, values);
-  device->allocate_tensor(DeviceMempool::PS, g);
-  TensorTools::zero(g);
+  if (updated){
+    g.d = d;
+    g.name = name + "_gradients";
+    device->allocate_tensor(DeviceMempool::PS, g);
+    TensorTools::zero(g);
+  }
   init.initialize_params(values);
 }
 
 size_t ParameterStorage::size() const { return dim.size(); }
 
 void ParameterStorage::zero() {
+  if (DAO::use_dao) values.v = (float*) DAO::dao_allocator.prepare(&values, true);
   TensorTools::zero(values);
   clear();
 }
@@ -113,9 +124,12 @@ void ParameterStorage::copy(const ParameterStorage & param) {
 }
 
 void ParameterStorage::clear() {
+  assert(updated);
   nonzero_grad = false;
-  if (g.v != nullptr)
-    TensorTools::zero(g);
+  // if (g.v != nullptr)
+  if (DAO::use_dao) g.v = (float*) DAO::dao_allocator.prepare(&g, true);
+  assert(g.v);
+  TensorTools::zero(g);
 }
 
 void ParameterStorage::clip(float left, float right) {
@@ -132,16 +146,18 @@ bool valid_parameter(const std::string & s) {
 }
 
 LookupParameterStorage::LookupParameterStorage(unsigned n, const Dim& d, const ParameterInit & init,
-                                               const std::string & name, Device *dev)
-    : name(name), dim(d), updated(true), all_updated(false),
+                                               const std::string & name, Device *dev, bool updated)
+    : name(name), dim(d), updated(updated), all_updated(false),
     nonzero_grad(false), owner(nullptr), device(dev) {
   DYNET_ARG_CHECK(default_device != nullptr,
                   "Attempting to define parameters before initializing DyNet. Be sure to call dynet::initialize() before defining your model.");
   all_dim = dim; all_dim.d[all_dim.nd++] = n;
   all_grads.d = all_values.d = all_dim;
   all_grads.device = all_values.device = device;
+  all_values.name = name + "_values";
   device->allocate_tensor(DeviceMempool::PS, all_values);
-  device->allocate_tensor(DeviceMempool::PS, all_grads);
+  if (updated) {all_grads.name = name + "_gradients";
+  device->allocate_tensor(DeviceMempool::PS, all_grads);}
   init.initialize_params(all_values);
   initialize_lookups();
 }
@@ -155,7 +171,7 @@ void LookupParameterStorage::initialize_lookups() {
     for (int i = 0; i < num; ++i)
       values[i] = Tensor(dim, all_values.v + i * dim_size, all_values.device, all_values.mem_pool);
   }
-  if (grads.size() == 0 && all_grads.v != nullptr) {
+  if (updated && grads.size() == 0 && all_grads.v != nullptr) {
     grads.resize(num);
     for (int i = 0; i < num; ++i)
       grads[i] = Tensor(dim, all_grads.v + i * dim_size, all_grads.device, all_grads.mem_pool);
@@ -163,6 +179,7 @@ void LookupParameterStorage::initialize_lookups() {
 }
 
 void LookupParameterStorage::zero() {
+  if (DAO::use_dao) all_values.v = (float*) DAO::dao_allocator.prepare(&all_values, true);
   TensorTools::zero(all_values);
 }
 
@@ -177,8 +194,10 @@ void LookupParameterStorage::copy(const LookupParameterStorage& param) {
 }
 
 void LookupParameterStorage::clear() {
+  assert(updated);
   // TODO: the GPU part is hacky, probably need a better heuristic
   if (all_grads.device->type == DeviceType::GPU || all_updated) {
+    if (DAO::use_dao) all_grads.v = (float*) DAO::dao_allocator.prepare(&all_grads, true);
     TensorTools::zero(all_grads);
   } else {
     for (auto i : non_zero_grads){
@@ -295,6 +314,9 @@ void ParameterCollectionStorage::project_weights(float radius) {
 
 ParameterCollection::ParameterCollection() : name("/"), storage(new ParameterCollectionStorage(default_weight_decay_lambda)), parent(nullptr) { }
 
+bool ParameterCollection::default_updated = true;
+void ParameterCollection::set_default_updated(bool status) { ParameterCollection::default_updated = status; }
+
 ParameterCollection::ParameterCollection(const string & my_name, ParameterCollection* my_parent, float weight_decay_lambda) :
     name(my_name), storage(new ParameterCollectionStorage(weight_decay_lambda)), parent(my_parent) { }
 
@@ -346,7 +368,22 @@ Parameter ParameterCollection::add_parameters(const Dim& d, const ParameterInit 
     int idx = name_cntr[p_name]++;
     if (idx > 0 || p_name.size() == 0) oss << "_" << idx;
 
-    std::shared_ptr<ParameterStorage> p = ParameterStorageCreator::create(d, init, oss.str(), device);
+    std::shared_ptr<ParameterStorage> p = ParameterStorageCreator::create(d, init, oss.str(), device, default_updated);
+    add_parameters_to_storage(p);
+    return Parameter(p);
+  } else {
+    throw std::runtime_error("Parameter name could not include '/' and '_'");
+  }
+}
+
+Parameter ParameterCollection::add_parameters(const Dim& d, const ParameterInit & init,
+                           const std::string & p_name, Device *device, bool trainable) {
+  if (valid_parameter(p_name)) {
+    ostringstream oss; oss << name << p_name;
+    int idx = name_cntr[p_name]++;
+    if (idx > 0 || p_name.size() == 0) oss << "_" << idx;
+
+    std::shared_ptr<ParameterStorage> p = ParameterStorageCreator::create(d, init, oss.str(), device, trainable);
     add_parameters_to_storage(p);
     return Parameter(p);
   } else {
@@ -362,6 +399,10 @@ void ParameterCollection::add_parameters_to_storage(std::shared_ptr<ParameterSto
   if(storage != nullptr) {
     storage->all_params.push_back(p);
     storage->params.push_back(p);
+    if (p->is_updated()) {
+      storage->all_updated_params.push_back(p);
+      storage->updated_params.push_back(p);
+    }
   }
 }
 
@@ -429,7 +470,7 @@ LookupParameter ParameterCollection::add_lookup_parameters(unsigned n, const Dim
     int idx = name_cntr[p_name]++;
     if (idx > 0 || p_name.size() == 0) oss << "_" << idx;
 
-    std::shared_ptr<LookupParameterStorage> p = LookupParameterStorageCreator::create(n, d, init, oss.str(), device);
+    std::shared_ptr<LookupParameterStorage> p = LookupParameterStorageCreator::create(n, d, init, oss.str(), device, default_updated);
     add_lookup_parameters_to_storage(p);
     return LookupParameter(p);
   } else {
@@ -445,6 +486,10 @@ void ParameterCollection::add_lookup_parameters_to_storage(std::shared_ptr<Looku
   if(storage != nullptr) {
     storage->all_params.push_back(p);
     storage->lookup_params.push_back(p);
+    if (p->is_updated()) {
+      storage->all_updated_params.push_back(p);
+      storage->updated_lookup_params.push_back(p);
+    }
   }
 }
 
@@ -477,8 +522,8 @@ ParameterCollection::get_lookup_parameter_storages() const {
 }
 
 void ParameterCollection::reset_gradient() {
-  for (auto p : get_storage().params) { p->clear(); }
-  for (auto p : get_storage().lookup_params) { p->clear(); }
+  for (auto p : get_storage().updated_params) { p->clear(); }
+  for (auto p : get_storage().updated_lookup_params) { p->clear(); }
 }
 
 size_t ParameterCollection::parameter_count() const {
@@ -812,7 +857,7 @@ void LookupParameterStorage::scale_gradient(float a) {
 
 template <class MyDevice>
 float ParameterCollectionStorage::gradient_l2_norm_dev(MyDevice &dev) const {
-  auto scratch_size = (all_params.size() + 1) * sizeof(float);
+  auto scratch_size = (all_updated_params.size() + 1) * sizeof(float);
   if (gradient_norm_scratch == nullptr || sizeof(gradient_norm_scratch) < scratch_size) {
     if (gradient_norm_scratch != nullptr) {
       dev.mem->free(gradient_norm_scratch);
@@ -821,21 +866,21 @@ float ParameterCollectionStorage::gradient_l2_norm_dev(MyDevice &dev) const {
   }
   size_t pi;
   size_t k1 = 0, k2 = 0;
-  for (pi = 0; pi < all_params.size(); ++pi) {
+  for (pi = 0; pi < all_updated_params.size(); ++pi) {
     Device *dev_k;
-    DYNET_ASSERT(all_params.size() == (params.size() + lookup_params.size()),
+    DYNET_ASSERT(all_updated_params.size() == (updated_params.size() + updated_lookup_params.size()),
                  "Unmatched parameter size");
-    if (params.size() > k1 && all_params[pi] == params[k1]) {
-      dev_k = params[k1]->device;
+    if (updated_params.size() > k1 && all_updated_params[pi] == updated_params[k1]) {
+      dev_k = updated_params[k1]->device;
       ++k1;
-    } else if (lookup_params.size() > k2 && all_params[pi] == lookup_params[k2]) {
-      dev_k = lookup_params[k2]->device;
+    } else if (updated_lookup_params.size() > k2 && all_updated_params[pi] == updated_lookup_params[k2]) {
+      dev_k = updated_lookup_params[k2]->device;
       ++k2;
     } else {
       DYNET_RUNTIME_ERR("Incorrect device type");
     }
     float *v = (float *)dev_k->mem->malloc(sizeof(float));
-    all_params[pi]->g_squared_l2norm(v);
+    all_updated_params[pi]->g_squared_l2norm(v);
     if (dev_k->type == DeviceType::CPU) {
       gradient_norm_scratch[pi] = *v;
     }
@@ -848,7 +893,7 @@ float ParameterCollectionStorage::gradient_l2_norm_dev(MyDevice &dev) const {
     else { throw std::runtime_error("Bad device type"); }
     dev_k->mem->free(v);
   }
-  Tensor scratch_t({(unsigned int)all_params.size()}, gradient_norm_scratch, &dev, DeviceMempool::NONE);
+  Tensor scratch_t({(unsigned int)all_updated_params.size()}, gradient_norm_scratch, &dev, DeviceMempool::NONE);
   Tensor sum_t({1}, gradient_norm_scratch + pi, &dev, DeviceMempool::NONE);
   t<0>(sum_t).device(*dev.edevice) = t<1>(scratch_t).sum().sqrt();
   return gradient_norm_scratch[pi];

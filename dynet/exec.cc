@@ -240,9 +240,24 @@ void SimpleExecutionEngine::backward(VariableIndex from_where, bool full) {
   //  false in this computation)
   vector<bool> needs_derivative(num_nodes, full);
   if (!full) {
-    for (auto i : cg.parameter_nodes)
-      if (i <= from_where)
-        needs_derivative[i] = true;
+    for (auto i : cg.parameter_nodes){
+      if (i <= from_where){
+        auto p_node = static_cast<const dynet::ParameterNodeBase*>(cg.nodes[i]);
+        if (p_node->type == dynet::ParameterNodeBase::PARAM) {
+            auto param_node = static_cast<const dynet::ParameterNode*>(p_node); 
+            if (param_node->params.p) {
+                needs_derivative[i] = param_node->params.p->is_updated();
+            }
+            else {
+                needs_derivative[i] = param_node->lparams.p->is_updated();
+            }
+        }
+        else if (p_node->type == dynet::ParameterNodeBase::LOOKUP) {
+            auto lookup_node = static_cast<const dynet::LookupNode*>(p_node);
+            needs_derivative[i] = lookup_node->params.p->is_updated();
+        }
+      }
+    }
 
     for (unsigned ni = 0; ni < num_nodes; ++ni) {
       bool nd = needs_derivative[ni];
@@ -309,7 +324,7 @@ void SimpleExecutionEngine::backward(VariableIndex from_where, bool full) {
 
   // Accumulate gradients into parameters.
   for (VariableIndex i : cg.parameter_nodes) {
-    if (i <= from_where) {
+    if (i <= from_where && needs_derivative[i]) {
       ParameterNodeBase* pnode = static_cast<ParameterNodeBase*>(cg.nodes[i]);
       pnode->accumulate_grad(ndEdfs[i]);
     }
