@@ -66,42 +66,40 @@ cp /ssd1/siyuanch/workspace_zelongg/DAO/models/124M/dynet-model.params models/gp
 ./build/examples/transformer-lm --train-percent 3 --use_offload --dao-gpu-mem 16384  --dao-verbose 0 -c models/gpt2-124M/hparams.ini --attn-lora-r 2 --attention-dropout-p 0.2 --ff-dropout-p 0.2 --reset-if-stuck --use-smaller-minibatch --dynet-seed 1 2>&1 | tee models/gpt2-124M-0.2/train.log
 ```
 
-DAO command line arguments
+#### DAO command line arguments
 - `--use_offload`: enable DAO's offloading backend; otherwise, we fallback to dynet's backend;
 - `--dao-gpu-mem [int]`: the gpu memory size for DAO's backend in MB;
 - `--dao-cpu-mem [int]`: the cpu memory size for DAO's backend in MB;
 - `--dao-verbose [int=0]`: the verbose level of DAO, default 0;
 - `--dao-debug`: enable a lot of assertions of DAO;
 - `--dynet-seed [int=0]`: the random seed; default = 0, meaning random;  
+- `--dao-profile 1`: enable tracing of kernels; In your c++ application code, #include <DAO/DAO.h> and use DAO::profiler.dump(std::string name) method to dump the traces into a "name.traces" file.
 
-Run xor test 
-```bash 
-cd build/dao/tests 
-# run with dao disabled 
-./dao_xor --dao-verbose 0 --dao-disable 
-# run with dao and verbose 
-./dao_xor --dao-verbose 1 
-Sample output
-0, 0, pred: -1
-1, 0, pred: 1
-0, 1, pred: 1
-1, 1, pred: -1
+## GPT2 scripts;
+We have a script to generate script for runnning gpt2; use `python examples/gpt2/gen_script.py --help` to look at the usage. 
+```bash
+python examples/gpt2/gen_script.py --name gpt2-124M -c models/gpt2-124M/hparams.ini --gpu-mem 3 --attn-lora-r 4 --attention-dropout-p 0.0 0.4 0.8 --ff-dropout-p 0.0 0.4 0.8 --update-freq 8 --bs 2048 --script-name run_linear
 ```
 
-## API design 
+## DAO API
+We use `Engine` to train the model by delaying the forward/backward/update. An usage The API can be seen in the [header](dao/include/engine.h), an example usage can be seen at [here](dao/tests/test_seq2seq.cc).
 
-- DAO::sync(): synchronize the frontend and backend thread. Only the most recently computed tensor is guaranteed to exist. For example, 
+Also, we add a feature to dynet to set if a parameter is trainable. `dynet::ParameterCollection::set_default_updated(bool trainable)` is used to set if the parameters is by default trainable or not. To specify if a parameter is trainable or not, one can use this api to add parameters into the collection:
+```c++
+/**
+   * \brief Add parameters with custom initializer
+   *
+   * \param d Shape of the parameter
+   * \param init Custom initializer
+   * \param name Name of the parameter
+   * \param device Device placement for the parameter
+   * \param trainable Whether the parameter is trainable or not
+   *
+   * \return Parameter object to be used in the computation graph
+   */
+  Parameter ParameterCollection::add_parameters(const Dim& d, const ParameterInit & init,
+                           const std::string & name, Device *device, bool trainable);
 ```
-loss = cg->forward(x)
-DAO::sync();
-float res = as_scalar(loss) # valid
-```
-- DAO::complete(const std::shared_ptr<T>& data): push the shared_ptr of data as a dummy kernel to the queue, so that it would be destructed after the kernel is pulled by the backend thread. 
-
-
-### Profile Traces
-Add `--dao-profile 1` to your bash when launching a dynet application to enable tracing of kernels;
-In your c++ application code, #include <DAO/DAO.h> and use DAO::profiler.dump(std::string name) method to dump the traces into a "name.traces" file. 
 
 
 <!-- <div align="center">

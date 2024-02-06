@@ -12,5 +12,6 @@ DAO_API cudaStream_t default_stream = cudaStreamDefault;
 DAO_API int default_device_id = 0;
 DAO_API bool debug_mode = false;
 DAO_API bool use_dao = false;
+DAO_API int offload_profiling = false;
 
 } //DAO

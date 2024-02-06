@@ -65,8 +65,10 @@ struct noPopQueue {
 
 struct TensorRecord {
     enum record_type_t {
-        INTERMIDIATE, 
-        GLOBAL
+        INTERMIDIATE,  // for intermidiate tensor release after run; 
+        OUTPUT, // for output tensors, release at next run; 
+        PARAMETER, // for parameter tensors, not release; 
+        OPTIMIZER_STATE // for optimizer state, not release;
     }record_type;
     std::string name;
     TensorUID tensor_id;
@@ -79,17 +81,29 @@ struct TensorRecord {
     void display(std::ostream& o, bool display_block = true) const;
 };
 
+struct MemoryStatistics {
+    std::unordered_map<tensor_status_t,
+    std::unordered_map<TensorRecord::record_type_t, size_t> > breakdown;
+    size_t total_cpu_usage;
+    size_t total_gpu_usage;
+};
 
 class GlobalMemRecord {
     std::unordered_map<TensorUID, TensorRecord> tensor_record_table;
 public:
     //if no such tensor id exist, create new, otherwise, lookup and update time access
     void delete_tensor(TensorUID tensor_id);
-    TensorRecord& lookup_tensor(TensorUID tensor_id);
+    /**
+     * @brief lookup a tensor in the table, if not exist, create a new one
+     * @param tensor_id the tensor id to lookup
+     * @param init_record_type the record type to initialize the tensor
+    */
+    TensorRecord& lookup_tensor(TensorUID tensor_id, TensorRecord::record_type_t init_record_type = TensorRecord::INTERMIDIATE);
     void display(std::ostream& o) const;
+    void self_check() const;
+    void get_statistics(MemoryStatistics&) const;
     void Register(std::unordered_set<TensorUID>& tensor_ids, logical_time_t t);
     void cal_last_access();
-    void self_check() const;
     const std::unordered_map<TensorUID, TensorRecord>& get_table() const {
         return tensor_record_table;
     }
@@ -115,12 +129,10 @@ private:
     // tensor_values for debug usage 
     std::unordered_map<TensorUID, std::vector<float> > tensor_values;
 
-    struct AllocatorStatistics {
-        size_t max_gpu_usage = 0;
-        size_t max_cpu_usage = 0;        
-    };
+    std::vector<MemoryStatistics> statistics;        
+    
+    
 
-    AllocatorStatistics statistics;
     std::vector<std::unordered_set<TensorUID> > all_accesses;
     std::unordered_set<TensorUID> zero_init_tensors; 
     Timer timer;
@@ -144,7 +156,7 @@ public:
      * @param tensor_id dynet::Tensor*
      * @param is_global whether this tensor is a global tensor (used to allocate from DyNet)
     */    
-    void* prepare(TensorUID tensor_id, bool is_global = false);
+    void* prepare(TensorUID tensor_id, TensorRecord::record_type_t record_type);
     
     /** Get values of a tensor*/
     std::vector<float> get_values(TensorUID tensor_id);
@@ -155,7 +167,15 @@ public:
     /** Register a kernel for delayed execution, called by allocator/trainer*/
     void Register(Kernel&& kernel);
 
+    /** Set a tensor to be global tensor, need mannual free*/
+    void set_record_type(TensorUID tensor_id, TensorRecord::record_type_t record_type);
+
+    /** Dump the memory breakdown to a csv file*/
+    void dump_memory_breakdown(const std::string& filename) const;
+
 protected:
+    size_t max_gpu_usage = 0;
+    size_t max_cpu_usage = 0;
     /** Reset states*/
     void reset();
     // free all intermidiate tensors
@@ -169,8 +189,6 @@ protected:
     void complete();
     /** Free up memory for a tensor*/
     void free(TensorUID tensor_id);
-    /** Set a tensor to be global tensor, need mannual free*/
-    void set_global(TensorUID tensor_id);
     /** Get the number of registered kernels*/
     size_t get_num_registered_kernels() {return all_accesses.size();}
 

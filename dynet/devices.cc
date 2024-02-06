@@ -88,7 +88,7 @@ void Device::allocate_tensor(DeviceMempool mp, Tensor & tens) {
   DYNET_ASSERT(pools[(int)mp] != nullptr, "Attempt to allocate tensor for null DeviceMempool");
 #if USE_DAO 
   if (DAO::use_dao) {
-  tens.v = (float*)DAO::dao_allocator.prepare(&tens, true);
+  tens.v = (float*)DAO::dao_allocator.prepare(&tens, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
   }
   else {tens.v = (float*)pools[(int)mp]->allocate(tens.d.size() * sizeof(float));}
 #else 

@@ -15,6 +15,7 @@
 #include <chrono>
 
 #include <DAO/globals.h>
+#include <stack>
 
 namespace DAO {
 
@@ -30,9 +31,11 @@ struct TimerValue
   {
     std::string type;
     std::string scope_tag;
+    std::stack<std::string> last_key;
     Timer(const char *t = "ADD");
     void start(const std::string& key);
     void stop(const std::string& key);
+    void stop();
     void scope(std::string key);
     void lock();
     void unlock();
@@ -45,7 +48,7 @@ struct TimerValue
 
     void log(std::string key, int v);
 
-    void save(std::string filename);
+    void save(const std::string& filename) const;
 
     double get(std::string key);
 

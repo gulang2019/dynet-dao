@@ -27,22 +27,44 @@ struct Instruction{
 };
 
 struct Engine {
+    /**
+     * \brief Constructor
+     * \brief If training, it should be initialized after the Parameters are 
+     * added to the ParameterCollection
+     * \param trainer The trainer to be used in the engine;
+    */
     Engine(dynet::Trainer* trainer = nullptr);
     ~Engine();
-
+    /**
+     * \brief Symbolic forward
+     * \param cg The computation graph
+     * \param expr The expression to be evaluated
+     * \return The tensor handle of the expression
+    */
     const dynet::Tensor& symbolic_forward(std::shared_ptr<dynet::ComputationGraph> cg, 
             const dynet::Expression& expr);
+    /**
+     * \brief Symbolic backward
+     * \param cg The computation graph
+     * \param expr The loss expression
+    */
     void symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg, 
             const dynet::Expression& expr); 
+    /**
+     * \brief Symbolic backward
+     * \param cg The computation graph
+     * \param expr The loss expression
+    */
     void symbolic_update();
-    
     /** 
      * Run the instructions in the engine.
      * Keep the outputs of the forward pass in the engine.
      * Keep weights & optimizer states in the engine.
      * Drop the gradients & intermidiates.
+     * \param max_gpu_mem The maximum GPU memory to be used
+     * \param max_cpu_mem The maximum CPU memory to be used
     */
-    void run();
+    void run(size_t* max_gpu_mem = nullptr, size_t* max_cpu_mem = nullptr);
 
     /** 
      * Clear up the all kernels, instructions, and outputs.
@@ -51,6 +73,11 @@ struct Engine {
 
     /**Utility functions*/
     void report(std::ostream& os = std::cout) const;
+    void dump_statistics(const std::string& filename) const; 
+    /**
+     * \brief Return the vector value of the tensor
+     * \param tensor The tensor to be evaluated; Must be the output of the forward pass
+    */
     std::vector<float> as_vector(const dynet::Tensor& tensor);
 
 private: 

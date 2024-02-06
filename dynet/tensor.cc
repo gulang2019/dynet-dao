@@ -207,7 +207,7 @@ void TensorTools::set_elements(const Tensor& v, const vector<float>& vec) {
 #if HAVE_CUDA
   } else if (v.device->type == DeviceType::GPU) {
     if (DAO::use_dao) {
-      const_cast<Tensor*>(&v)->v = (float*)DAO::dao_allocator.prepare(const_cast<Tensor*>(&v), true);
+      const_cast<Tensor*>(&v)->v = (float*)DAO::dao_allocator.prepare(const_cast<Tensor*>(&v), DAO::TensorRecord::record_type_t::PARAMETER);
     }
     CUDA_CHECK(cudaSetDevice(((Device_GPU*)v.device)->cuda_device_id));
     cudaMemcpyAsync(v.v, &vec[0], sizeof(real) * vec.size(), cudaMemcpyHostToDevice);
@@ -304,7 +304,7 @@ void TensorTools::randomize_normal(Tensor& val, real mean, real stddev) {
     generate(val.v, val.v + val.d.size(), b);
 #if HAVE_CUDA
   } else if (val.device->type == DeviceType::GPU) {
-    if (DAO::use_dao) val.v = (float*)DAO::dao_allocator.prepare(&val, true);
+    if (DAO::use_dao) val.v = (float*)DAO::dao_allocator.prepare(&val, DAO::TensorRecord::record_type_t::PARAMETER);
     CUDA_CHECK(cudaSetDevice(((Device_GPU*)val.device)->cuda_device_id));
     CURAND_CHECK(curandGenerateNormal(((Device_GPU*)val.device)->curandeng, val.v, val.d.size(), mean, stddev));
 #endif
@@ -319,7 +319,7 @@ void TensorTools::randomize_uniform(Tensor& val, real left, real right) {
     generate(val.v, val.v + val.d.size(), b);
 #if HAVE_CUDA
   } else if (val.device->type == DeviceType::GPU) {
-    if (DAO::use_dao) val.v = (float*)DAO::dao_allocator.prepare(&val, true);
+    if (DAO::use_dao) val.v = (float*)DAO::dao_allocator.prepare(&val, DAO::TensorRecord::record_type_t::PARAMETER);
     CUDA_CHECK(cudaSetDevice(((Device_GPU*)val.device)->cuda_device_id));
     CURAND_CHECK(curandGenerateUniform(((Device_GPU*)val.device)->curandeng, val.v, val.d.size()));
     if(left != 0 || right != 1)
@@ -338,7 +338,7 @@ void TensorTools::randomize_orthonormal(Tensor& val, real scale) {
     mat(val) = scale * svd.matrixU();
 #ifdef HAVE_CUDA
   } else if (val.device->type == DeviceType::GPU) {
-    if (DAO::use_dao) val.v = (float*)DAO::dao_allocator.prepare(&val, true);
+    if (DAO::use_dao) val.v = (float*)DAO::dao_allocator.prepare(&val, DAO::TensorRecord::record_type_t::PARAMETER);
     DYNET_NO_CUDA_IMPL_ERROR("Orthonormal initialization");
     // TODO: The following should work, but for some reason it isn't working
     // float* t = new float[val.d.size()];
@@ -416,7 +416,7 @@ void TensorTools::constant(Tensor& d, float c) {
   DAO_INFO_LEVEL(1, "TensorsTools::constant called");
   if (d.device->type == DeviceType::CPU) { return constant_dev(*(const Device_CPU*)d.device, d, c); }
   else if (d.device->type == DeviceType::GPU) { 
-    if (DAO::use_dao) d.v = (float*)DAO::dao_allocator.prepare(&d, true);
+    if (DAO::use_dao) d.v = (float*)DAO::dao_allocator.prepare(&d, DAO::TensorRecord::record_type_t::PARAMETER);
     return constant_dev(*(const Device_GPU*)d.device, d, c); }
   else { throw std::runtime_error("Bad device type"); }
 }

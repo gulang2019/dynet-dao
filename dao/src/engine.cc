@@ -1,11 +1,11 @@
 #include "DAO/engine.h" 
-
+#include <dynet/sig.h>
 #include <dynet/devices.h>
 #include <dynet/param-nodes.h>
 #include <dynet/globals.h>
 #include <dynet/weight-decay.h>
 
-
+#include <cuda_runtime.h>
 #include <string>
 
 namespace DAO { 
@@ -15,6 +15,26 @@ using dynet::Tensor;
 using dynet::VariableIndex;
 
 bool enabled = false;
+
+std::unordered_map<int, const char *> nt2str = {
+    {0, "unknown"},
+    {dynet::nt::NodeType::tanh,"tanh"}, {dynet::nt::NodeType::sqrt,"sqrt"}, {dynet::nt::NodeType::abs,"abs"}, {dynet::nt::NodeType::erf,"erf"}, {dynet::nt::NodeType::square,"square"}, {dynet::nt::NodeType::cube,"cube"}, {dynet::nt::NodeType::exp,"exp"}, {dynet::nt::NodeType::logsigmoid,"logsigmoid"}, {dynet::nt::NodeType::loggamma,"loggamma"}, {dynet::nt::NodeType::log,"log"}, {dynet::nt::NodeType::nobackprop,"nobackprop"}, {dynet::nt::NodeType::scalegradient,"scalegradient"}, {dynet::nt::NodeType::identity,"identity"}, {dynet::nt::NodeType::negate,"negate"}, {dynet::nt::NodeType::rectify,"rectify"}, {dynet::nt::NodeType::logistic,"logistic"}, {dynet::nt::NodeType::softsign,"softsign"}, {dynet::nt::NodeType::silu,"silu"}, {dynet::nt::NodeType::round,"round"}, {dynet::nt::NodeType::ceiling,"ceiling"}, {dynet::nt::NodeType::floor,"floor"},
+    {dynet::nt::NodeType::sinh,"sinh"}, {dynet::nt::NodeType::cosh,"cosh"}, {dynet::nt::NodeType::asinh,"asinh"}, {dynet::nt::NodeType::acosh,"acosh"}, {dynet::nt::NodeType::atanh,"atanh"}, {dynet::nt::NodeType::sin,"sin"}, {dynet::nt::NodeType::cos,"cos"}, {dynet::nt::NodeType::tan,"tan"}, {dynet::nt::NodeType::asin,"asin"}, {dynet::nt::NodeType::acos,"acos"}, {dynet::nt::NodeType::atan,"atan"}, {dynet::nt::NodeType::plus_const,"plus_const"}, {dynet::nt::NodeType::concat,"concat"}, {dynet::nt::NodeType::cmult,"cmult"}, {dynet::nt::NodeType::csum,"csum"}, {dynet::nt::NodeType::sum,"sum"}, {dynet::nt::NodeType::squared_distance,"squared_distance"}, {dynet::nt::NodeType::softmax,"softmax"}, {dynet::nt::NodeType::pnls,"pnls"}, {dynet::nt::NodeType::pickrange,"pickrange"}, {dynet::nt::NodeType::scalar_mult,"scalar_mult"}, {dynet::nt::NodeType::dropout,"dropout"},
+    {dynet::nt::NodeType::input,"input"}, {dynet::nt::NodeType::scalar_input,"scalar_input"}, {dynet::nt::NodeType::lookup,"lookup"},
+    {dynet::nt::NodeType::COMPLEX,"COMPLEX"},
+    {dynet::nt::NodeType::affine,"affine"}, {dynet::nt::NodeType::matmul,"matmul"}, {dynet::nt::NodeType::transpose,"transpose"},
+    {dynet::nt::NodeType::vanilla_lstm_gates,"vanilla_lstm_gates"}, {dynet::nt::NodeType::vanilla_lstm_h,"vanilla_lstm_h"}, {dynet::nt::NodeType::vanilla_lstm_c,"vanilla_lstm_c"},
+    {dynet::nt::NodeType::conv2d,"conv2d"},
+}; 
+
+inline const char* node2str(const Node* node) {
+    static dynet::SigMap sigmap;
+    auto t = sigmap.sig2type(node->autobatch_sig(*node->get_cg(), sigmap));
+    if (t == 0) return nullptr;
+    return nt2str[t];
+}
+
+
 
 Engine::Engine(dynet::Trainer* trainer): allocator(dao_allocator), trainer(trainer) {
     if (trainer) {
@@ -131,7 +151,7 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
 
         allocator.Register(std::move(kernel));
     }
-    allocator.set_global(nfxs.back());
+    allocator.set_record_type(nfxs.back(), DAO::TensorRecord::OUTPUT);
     timer.stop("symbolic_forward");
     DAO_ASSERT(sanity_check(), "sanity_check() failed");
     return *nfxs.back();
@@ -284,7 +304,10 @@ void Engine::symbolic_backward(std::shared_ptr<dynet::ComputationGraph> cg,
     timer.stop("symbolic_backward");
 }
 
-void Engine::run() {
+void Engine::run(
+    size_t* max_gpu_usage,
+    size_t* max_cpu_usage 
+) {
     timer.start("run");
     for (auto o: outputs) {
         allocator.free(o);
@@ -310,6 +333,8 @@ void Engine::run() {
             timer.stop("run update");
         }
     }
+    if (max_gpu_usage) *max_gpu_usage = std::max(*max_gpu_usage, allocator.max_gpu_usage);
+    if (max_cpu_usage) *max_cpu_usage = std::max(*max_cpu_usage, allocator.max_cpu_usage);
     evaluated = true;
     reset();
     timer.stop("run");
@@ -375,7 +400,15 @@ void Engine::run_forward(Instruction& inst) {
             xs.push_back(nfxs[x]);
         }
         
+        if (DAO::offload_profiling) {
+            if (const char* name = node2str(node)) {
+                timer.start("FWD " + std::string(name));
+            }
+            else timer.start("FWD " + node->as_dummy_string());
+        }
+
         allocator.prepare();
+
 
         if (verbose) {
             std::vector<std::string> input_sizes;
@@ -413,6 +446,11 @@ void Engine::run_forward(Instruction& inst) {
 
         node->forward(xs, *node_fx);
         allocator.complete();
+
+        if (DAO::offload_profiling) {
+            cudaDeviceSynchronize();
+            timer.stop();
+        }
     }
 
     outputs.insert(nfxs.back());
@@ -434,8 +472,40 @@ void Engine::run_backward(Instruction& inst) {
     ndEdfs.back()->v = cg->nodes.back()->device->kSCALAR_ONE;
 
     for (auto& bwd_kernel: bwd_kernels) {
-        allocator.prepare();
         auto node = cg->nodes[bwd_kernel.fx_idx];
+        
+        if (DAO::offload_profiling){
+            if (const char* name = node2str(node)) {
+                timer.start("FWD " + std::string(name));
+            }
+            else {
+                timer.start("FWD " + node->as_dummy_string());
+            }
+        }
+        
+        if (DAO::offload_profiling){
+            if (const char* name = node2str(node)) {
+                timer.start("FWD " + std::string(name) + " prepare");
+            }
+            else {
+                timer.start("FWD " + node->as_dummy_string() + " prepare");
+            }
+        }
+        allocator.prepare();
+        if (DAO::offload_profiling)
+        {
+            cudaDeviceSynchronize();
+            timer.stop();
+        }
+
+        if (DAO::offload_profiling){
+            if (const char* name = node2str(node)) {
+                timer.start("FWD " + std::string(name) + " exec");
+            }
+            else {
+                timer.start("FWD " + node->as_dummy_string() + " exec");
+            }
+        }
         std::vector<const Tensor*> xs;
         for (auto arg: node->args) {
             auto& nfx = nfxs[arg];
@@ -471,12 +541,39 @@ void Engine::run_backward(Instruction& inst) {
 
         node->backward(xs, *node_fx, *node_dEdfx, bwd_kernel.ai, *node_dEdxai);
 
+        if (DAO::offload_profiling)
+        {
+            cudaDeviceSynchronize();
+            timer.stop();
+        }
+
+        if (DAO::offload_profiling){
+            if (const char* name = node2str(node)) {
+                timer.start("FWD " + std::string(name) + " exec");
+            }
+            else {
+                timer.start("FWD " + node->as_dummy_string() + " exec");
+            }
+        }
+
         allocator.complete();
+
+        if (DAO::offload_profiling)
+        {
+            cudaDeviceSynchronize();
+            timer.stop();
+        }
+
+        if (DAO::offload_profiling)
+        {
+            cudaDeviceSynchronize();
+            timer.stop();
+        }
     }
 
     DAO_INFO_LEVEL(1, "BWD finished");
 
-
+    if (DAO::offload_profiling) timer.start("accumulate_grad");
     for (auto& acc_grad_kernel: acc_kernels) {
         auto& node = acc_grad_kernel.pnode;
         allocator.prepare();
@@ -489,6 +586,9 @@ void Engine::run_backward(Instruction& inst) {
         acc_grad_kernel.pnode->accumulate_grad(*acc_grad_kernel.ndEdf);
         allocator.complete();
     }
+    if (DAO::offload_profiling) {
+        cudaDeviceSynchronize();
+        timer.stop("accumulate_grad");}
 }
 
 void Engine::symbolic_update() {
@@ -535,7 +635,7 @@ void Engine::symbolic_update() {
         }
         else {
             if (debug_mode)
-                DAO_WARNING("%s is not updated", lparam->name.c_str();
+                DAO_WARNING("%s is not updated", lparam->name.c_str());
         }
     }
 
@@ -573,6 +673,11 @@ Engine::~Engine() {
         delete o;
     }
     reset();
+}
+
+void Engine::dump_statistics(const std::string& filename) const {
+    allocator.dump_memory_breakdown(filename);
+    timer.save(filename);
 }
 
 } // namespace DAO

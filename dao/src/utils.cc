@@ -22,6 +22,7 @@ Timer::Timer(const char *t) : type(t)
     auto &scope = scopes[scope_tag];
     if (scope.start_times.count(key) == 0)
       scope.start_times[key] = std::chrono::high_resolution_clock::now();
+    last_key.push(key);
   }
 
   void Timer::stop(const std::string& key)
@@ -43,6 +44,12 @@ Timer::Timer(const char *t) : type(t)
       scope.values[key] += elapsed;
     }
     scope.start_times.erase(key);
+  }
+
+  void Timer::stop() {
+    assert(!last_key.empty());
+    Timer::stop(last_key.top());
+    last_key.pop();
   }
 
   void Timer::lock() { locked = true; }
@@ -113,23 +120,28 @@ Timer::Timer(const char *t) : type(t)
     scope.log_values[key].push_back(v);
   }
 
-  void Timer::save(std::string filename)
+  void Timer::save(const std::string& filename) const
   {
-    std::ofstream file;
-    file.open(filename);
-    file << "alg,metric,value" << std::endl; 
-    for (auto item : scopes)
-    {
-      auto &name = item.first;
-      auto &scope = item.second;
-      for (auto kv : scope.values)
-      {
-        file << name << "," << kv.first << "," << kv.second << std::endl;
-      }
-      for (auto kv : scope.int_values)
-      {
-        file << name << "," << kv.first << "," << kv.second << std::endl;
-      }
+    std::string _filename;
+    size_t lastDotPosition = filename.find_last_of('.');
+    if (lastDotPosition != std::string::npos) {
+        _filename = filename.substr(0, lastDotPosition);
+    }
+    else _filename = filename;
+    _filename += ".timer.csv";
+    std::ofstream file(_filename);
+    auto& scope = scopes.at("default");
+    file << "metric,value,percent" << std::endl;
+    std::vector<std::pair<std::string, double>> values;
+    double tot = 0;
+    for (auto kv : scope.values) {
+      values.push_back(kv);
+      tot += kv.second;
+    }
+    sort(values.begin(), values.end(), [](std::pair<std::string, double> &v1, std::pair<std::string, double> &v2)
+        { return v1.second > v2.second; });
+    for (auto kv : values) {
+      file << kv.first << "," << kv.second << "," << kv.second/tot*100 << std::endl;
     }
     file.close();
   }

@@ -24,6 +24,7 @@ using namespace DAO;
 
 #include <dynet/param-nodes.h>
 
+
 using namespace std;
 using namespace dynet;
 using namespace transformer;
@@ -48,7 +49,13 @@ unsigned NUM_RESETS = 1;
 bool SAMPLING_TRAINING = false;
 
 bool VERBOSE = false;
+
+char* LOG_FILE = nullptr;
+
+unsigned UPDATE_FREQ = 4;
 MyTimer timer_g("+");
+
+std::string PROFILING_STAT = "profiling";
 
 // ---
 bool load_data(const variables_map& vm
@@ -120,6 +127,12 @@ int main(int argc, char** argv) {
 	opts.add_options()
 		("help", "print help message")
 		("config,c", value<std::string>(), "config file specifying additional command line options")
+		//-----------------------------------------DAO-----
+		("update-freq", value<unsigned>()->default_value(4), "update frequency for delayed run")
+		("logging", "whether to log or not")
+		("name", value<std::string>()->default_value("gpt"), "a name tag for the experiment")
+		("init-params", value<std::string>(), "the path to init params")
+		("profiling", value<std::string>(), "the profiling tag")
 		//-----------------------------------------
 		("train,t", value<std::vector<std::string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
 		("devel,d", value<std::string>(), "file containing development sentences.")
@@ -147,6 +160,7 @@ int main(int argc, char** argv) {
 		("emb-dropout-p", value<float>()->default_value(0.1f), "use dropout for word embeddings; 0.1 by default")
 		("sublayer-dropout-p", value<float>()->default_value(0.1f), "attention dropout; 0.1 by default")
 		("attention-dropout-p", value<float>()->default_value(0.1f), "prob for skipping attention layer; 0.1 by default")
+		("dropout-decay", value<bool>()->default_value(false), "droptout schedule: constant or decay; constant by default")
 		("ff-dropout-p", value<float>()->default_value(0.1f), "prob for skipping feed-forward layer; 0.1 by default")
 		//-----------------------------------------
 		("use-label-smoothing", "use label smoothing for cross entropy; no by default")
@@ -227,6 +241,7 @@ int main(int argc, char** argv) {
 	NUM_RESETS = vm["num-resets"].as<unsigned>();
 	PRINT_GRAPHVIZ = vm.count("print-graphviz");
 	MINIBATCH_SIZE = vm["minibatch-size"].as<unsigned>();
+	UPDATE_FREQ = vm["update-freq"].as<unsigned>();
 	bool is_training = !vm.count("test");
 
 	// get and check model path
@@ -237,13 +252,27 @@ int main(int argc, char** argv) {
 	else
 		TRANSFORMER_RUNTIME_ASSERT("The model-path does not exist!");
 
+	if (vm.count("logging")){
+		LOG_FILE = strdup((model_path + "/log.csv").c_str());
+		std::ofstream log(LOG_FILE);
+		log << "tot_time,tot_exec_time,iter_time,iter_exec_time,loss,max_gpu_usage,max_cpu_usage,n_attn,n_ff,n_layer" << std::endl;
+		log.close();
+	}
+
+	if (vm.count("profiling")) {
+		PROFILING_STAT=vm["profiling"].as<std::string>();
+	}
+
 	// model recipe
 	gpt_vocab d;
 	SentinelMarkers sm;// sentinel markers
 	WordIdSentences train_cor, devel_cor, test_cor;// integer-converted train and dev data
 	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
+	
 	tfc._attn_lora_r = vm["attn-lora-r"].as<unsigned>();
 	tfc._ff_lora_r = vm["ff-lora-r"].as<unsigned>();
+	if (tfc._attn_lora_r || tfc._ff_lora_r) // if non-zero, use LoRA for attention/FF fine-tune
+		dynet::ParameterCollection::set_default_updated(false);
 
 	std::string config_file = model_path + "/model.config";// configuration file path
 
@@ -295,7 +324,7 @@ int main(int argc, char** argv) {
 			TRANSFORMER_RUNTIME_ASSERT("Failed to load data files!");
 
 		// transformer configuration
-		tfc = transformer::TransformerConfig(0, d.size()
+		tfc = transformer::TransformerConfig(0, d.size() + PAD_TOKENS
 			, vm["num-units"].as<unsigned>()
 			, vm["num-heads"].as<unsigned>()
 			, vm["nlayers"].as<unsigned>()
@@ -306,6 +335,7 @@ int main(int argc, char** argv) {
 			, vm["sublayer-dropout-p"].as<float>()
 			, vm["attention-dropout-p"].as<float>()
 			, vm["ff-dropout-p"].as<float>()
+			, vm["dropout-decay"].as<bool>()
 			, vm.count("use-label-smoothing")
 			, vm["label-smoothing-weight"].as<float>()
 			, vm["position-encoding"].as<unsigned>()
@@ -332,12 +362,16 @@ int main(int argc, char** argv) {
 		// initialise transformer object
 		transformer::TransformerLModel tf(tfc, d);
 		std::string model_file = model_path + "/model.params";
+		if (vm.count("init-params") > 0)
+			model_file = vm["init-params"].as<std::string>();
 		if (stat(model_file.c_str(), &sb) == 0 && S_ISREG(sb.st_mode))
 		{
 			cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
 			tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
 		}
 		cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
+		cerr << endl << "Count of trainable parameters: " << tf.get_model_parameters().updated_parameter_count() << endl;
+		
 		size_t lora_count = 0;
 		for (const auto param : tf.get_model_parameters().parameters_list()) {
 			if (param->name.find("lora.") != string::npos)
@@ -628,6 +662,29 @@ void get_dev_stats(const WordIdSentences &devel_cor
 }
 // ---
 
+struct Stat {
+	float loss = 0;
+	double iter_exec_time = 0;
+	double iter_time = 0;
+	double tot_exec_time = 0;
+	double tot_time = 0;
+	int n_attns = 0;
+	int n_ffs = 0;
+	size_t max_cpu_usage = 0;
+	size_t max_gpu_usage = 0;
+	unsigned n_layers = 0;
+	void reset() {
+		loss = 0;
+		iter_exec_time = 0;
+		iter_time = 0;
+		n_attns = 0;
+		n_ffs = 0;
+		max_cpu_usage = 0;
+		max_gpu_usage = 0;
+		n_layers = 0;
+	}
+}; 
+
 // ---
 void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, WordIdSentences &devel_cor, 
 	dynet::Trainer* &p_sgd, 
@@ -675,7 +732,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	/*DAO's offloaded training*/
 	Engine* engine = nullptr;
 	std::vector<const dynet::Tensor*> symbolic_losses;
-	const int update_freq = 1;
+	const int update_freq = UPDATE_FREQ;
 	int update_cnt = 0;
 	if (DAO::use_dao) {
 		DAO_INFO("Using DAO's offloaded training");
@@ -683,6 +740,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	}
 	/*End*/
 
+	Stat stat; // per iteration stat
 	while (epoch < max_epochs) {
 		transformer::ModelStats tstats;
 
@@ -723,7 +781,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			}
 	
 			transformer::ModelStats ctstats;
-			Expression i_xent = tf.build_graph(cg, train_cor_minibatch[train_ids_minibatch[id]], &ctstats);
+			Expression i_xent = tf.build_graph(cg, train_cor_minibatch[train_ids_minibatch[id]], &ctstats, false, &stat.n_attns, &stat.n_ffs);
 	
 			if (PRINT_GRAPHVIZ) {
 				cerr << "***********************************************************************************" << endl;
@@ -744,6 +802,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 				symbolic_losses.push_back(&engine->symbolic_forward(pCg, i_objective));
 				engine->symbolic_backward(pCg, i_objective);
 				engine->symbolic_update();
+				stat.n_layers += tfc._nlayers;
 				tstats._words_tgt += ctstats._words_tgt;
 				tstats._words_tgt_unk += ctstats._words_tgt_unk;
 				sid += train_cor_minibatch[train_ids_minibatch[id]].size();
@@ -751,32 +810,51 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 				if (++update_cnt == update_freq
 				|| iter >= dev_every_i_reports 
 				|| id + 1 == train_ids_minibatch.size()) {
-					engine->run();
-					engine->report();
 					update_cnt = 0;
+					MyTimer exec_timer("exec_time");
+					engine->run(&stat.max_gpu_usage, &stat.max_cpu_usage);
 					for (auto& loss: symbolic_losses) {
 						float loss_value = engine->as_vector(*loss)[0];
-						std::cout << "loss " << iter << " " << sid << " " << loss_value << std::endl;
 						// DAO_INFO_LEVEL(0, "loss %d, %d, %f", iter, sid, loss_value);
 						DAO_ASSERT(is_valid(loss_value), "nan or -nan values occurred!");
 						tstats._scores[1] += loss_value;
 					}
+					stat.iter_exec_time = exec_timer.elapsed();
+					stat.tot_exec_time += stat.iter_exec_time;
 					symbolic_losses.clear();
+					if (DAO::offload_profiling) {
+						engine->dump_statistics(PROFILING_STAT);
+						DAO_INFO_LEVEL(0, "Dump profiling data to %s.csv", PROFILING_STAT.c_str());
+						goto finish; 
+					}
 					if (sid / report_every_i != last_print 
 							|| iter >= dev_every_i_reports
 							|| id + 1 == train_ids_minibatch.size()){
 						last_print = sid / report_every_i;
 
 						float elapsed = timer_iteration.elapsed();
-
 						p_sgd->status();
 						cerr << "t=" << timer_g.elapsed()/1000 << "s ";
+						cerr << "cpu: " << ((stat.max_cpu_usage)>>20) << " gpu: " << ((stat.max_gpu_usage)>>20) << " ";
+						cerr << "skip(A/F/N): " << stat.n_attns << "/" << stat.n_ffs << "/" << stat.n_layers << " ";
 						cerr << "sents=" << sid << " ";
 						cerr /*<< "loss=" << tstats._scores[1]*/ << "words=" << tstats._words_tgt << " unks=" << tstats._words_tgt_unk << " " << tstats.get_score_string() << ' ';
 						cerr /*<< "time_elapsed=" << elapsed*/ << "(" << (float)(tstats._words_tgt) * 1000.f / elapsed << " words/sec)" << endl;
 						
+						stat.loss = tstats._scores[1] / tstats._words_tgt;
+						stat.iter_time = elapsed;
+						stat.tot_time += stat.iter_time;
+
+						if (LOG_FILE) {
+							std::ofstream logfile(LOG_FILE, std::ios::app);
+							// log << "tot_time,tot_exec_time,iter_time,iter_exec_time,loss,max_gpu_usage,max_cpu_usage,n_attn,n_ff,n_layer" << std::endl;
+							logfile << stat.tot_time << "," << stat.tot_exec_time << "," << stat.iter_time << "," << stat.iter_exec_time << "," << stat.loss << "," << stat.max_gpu_usage << "," << stat.max_cpu_usage << "," << stat.n_attns << "," << stat.n_ffs << "," << stat.n_layers << std::endl;
+							logfile.close();
+						}
+
 						timer_iteration.reset();
 						tstats = ModelStats();
+						stat.reset();
 					}
 				}
 				++id;
@@ -842,7 +920,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 			dstats._scores[1] += as_scalar(cg.forward(i_xent));
 		}*/
 		// batched version (faster)
-		engine->report();
+		if (use_dao) engine->report();
 		DAO_INFO("start dev");
 		float dloss = 0.f;
 		for (const WordIdSentences& dsentb : dev_cor_minibatch){
@@ -932,6 +1010,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 		cerr << "--------------------------------------------------------------------------------------------------------" << endl;
 	}
 finish:
+	free(LOG_FILE);
 	delete engine; 
 	cerr << endl << "Transformer training completed!" << endl;
 	// DAO::profiler.dump(model_path + "/train");

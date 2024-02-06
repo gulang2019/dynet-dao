@@ -82,7 +82,8 @@ struct LMDecoderLayer{
 
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const dynet::Expression& i_dec_inp
-		, const MaskBase& self_mask)
+		, const MaskBase& self_mask, 
+		bool* skip_attention = nullptr, bool* skip_ff = nullptr)
 	{	
 		// get expressions for layer normalisation, e.g., i_ln1_g, i_ln1_b, i_ln2_g, i_ln2_b, i_ln3_g, i_ln3_b
 		dynet::Expression i_ln1_g = dynet::parameter(cg, _p_ln1_g);
@@ -94,8 +95,10 @@ struct LMDecoderLayer{
 		//! dynet::dropout apply scaling at training time
 		// stoch depth
 		dynet::Expression i_mh_self_att = i_decl;
+		if (skip_attention) *skip_attention = true;
+		
+		float attn_skip_prob = _p_tfc->_decay_dropout? _p_tfc->_attention_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1) : _p_tfc->_attention_dropout_rate;
 		if (_p_tfc->_use_dropout) { // training
-			float attn_skip_prob = _p_tfc->_attention_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1);
 			if (rand01() > attn_skip_prob) {
 				// layer normalisation 1 (prenorm)
 				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
@@ -103,32 +106,33 @@ struct LMDecoderLayer{
 				i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
 				// element-wise dropout applied within attn sublayer
 
-				i_mh_self_att = i_mh_self_att / (1-attn_skip_prob);
+				if (skip_attention) *skip_attention = false;
 				i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)		
 			} // else skipped, residual=0
 		} else { // inference
 			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 			i_mh_self_att = _self_attention_sublayer.build_graph(cg, i_ln, i_ln, self_mask);// ((num_units, Ly), batch_size)				
-
+			i_mh_self_att = i_mh_self_att * (1-attn_skip_prob);
 			i_decl = i_decl + i_mh_self_att;// ((num_units, Ly), batch_size)		
 		}
 
+		if (skip_ff) *skip_ff = true;
 		dynet::Expression i_ff = i_decl;
+		float ff_skip_prob = _p_tfc->_decay_dropout? _p_tfc->_ff_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1) : _p_tfc->_ff_dropout_rate;
 		if (_p_tfc->_use_dropout) { // training
-			float ff_skip_prob = _p_tfc->_ff_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1);
 			if (rand01() > ff_skip_prob) {
 				// layer normalisation 3 (prenorm)
 				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 				// position-wise feed-forward sub-layer
 				i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
 
-				i_ff = i_ff / (1-ff_skip_prob);
 				i_decl = i_decl + i_ff;
+				if (skip_ff) *skip_ff = false;
 			} // else skipped, residual=0
 		} else { // inference
 			dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 			i_ff = _feed_forward_sublayer.build_graph(cg, i_ln);// ((num_units, Ly), batch_size)
-
+			i_ff = i_ff * (1-ff_skip_prob);
 			i_decl = i_decl + i_ff;
 		}
 
@@ -255,9 +259,10 @@ struct LMDecoder{
 						else
 							positions[bs] = l;
 				}
-
-					auto pos_emb = freeze_embedding ? 
-							dynet::const_lookup(cg, _p_embed_pos, positions) : dynet::lookup(cg, _p_embed_pos, positions);
+					
+					// auto pos_emb = freeze_embedding ? 
+					// 		dynet::const_lookup(cg, _p_embed_pos, positions) : dynet::lookup(cg, _p_embed_pos, positions);
+					auto pos_emb = dynet::lookup(cg, _p_embed_pos, positions);
 					pos_embeddings.push_back(pos_emb);
 				}
 				dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
@@ -375,31 +380,45 @@ struct LMDecoder{
 	}
 
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
-		, const WordIdSentences& tsents/*batch of sentences*/)
+		, const WordIdSentences& tsents/*batch of sentences*/,
+		int* n_attn = nullptr, int* n_ff = nullptr)
 	{		
 		// compute target (+ postion) embeddings
 		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, tsents);// ((num_units, Ly), batch_size)
 			
 		dynet::Expression i_dec_l_out = i_tgt_rep;
+		bool skip_attn, skip_ff;
+		int n_attns = 0, n_ffs = 0;
 		for (auto dec : _v_dec_layers){
 			// stacking approach
-			i_dec_l_out = dec.build_graph(cg, i_dec_l_out, _self_mask);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
+			i_dec_l_out = dec.build_graph(cg, i_dec_l_out, _self_mask, &skip_attn, &skip_ff);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
+			n_attns += !skip_attn;
+			n_ffs += !skip_ff;
 		}
+		if (n_attn) *n_attn += n_attns;
+		if (n_ff) *n_ff += n_ffs;
 	
 		return i_dec_l_out;// ((num_units, Ly), batch_size)
 	}
 
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
-		, const std::vector<dynet::Expression>& v_soft_tsents/*batch of soft sentences*/)
+		, const std::vector<dynet::Expression>& v_soft_tsents/*batch of soft sentences*/,
+		int* n_attn = nullptr, int* n_ff = nullptr)
 	{		
 		// compute target (+ postion) embeddings
 		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, v_soft_tsents);// ((num_units, Ly), batch_size)
-			
+		
+		bool skip_attn, skip_ff;
+		int n_attns = 0, n_ffs = 0;
 		dynet::Expression i_dec_l_out = i_tgt_rep;
 		for (auto dec : _v_dec_layers){
 			// stacking approach
-			i_dec_l_out = dec.build_graph(cg, i_dec_l_out, _self_mask);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
+			i_dec_l_out = dec.build_graph(cg, i_dec_l_out, _self_mask, &skip_attn, &skip_ff);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
+			n_attns += !skip_attn;
+			n_ffs += !skip_ff;
 		}
+		if (n_attn) *n_attn = n_attns;
+		if (n_ff) *n_ff = n_ffs;
 	
 		return i_dec_l_out;// ((num_units, Ly), batch_size)
 	}
@@ -422,7 +441,9 @@ public:
 	dynet::Expression build_graph(dynet::ComputationGraph &cg
 		, const WordIdSentences& sents/*batched*/
 		, ModelStats* pstats=nullptr
-		, bool is_eval_on_dev=false);	
+		, bool is_eval_on_dev=false
+		, int* n_attn=nullptr
+		, int* n_ff=nullptr);	
 	void get_avg_ll(dynet::ComputationGraph &cg
 		, const WordIdSentences& tsents
 		, std::vector<float>& v_losses
@@ -474,6 +495,8 @@ TransformerLModel::TransformerLModel(const TransformerConfig& tfc, gpt_vocab& d)
 {
 	_all_params.reset(new DyNetModel());// create new model parameter object
 
+	
+
 	_decoder.reset(new LMDecoder(_all_params.get(), _tfc));// create new decoder object
 
 	auto mod_lnf = _all_params.get()->add_subcollection("ln-f");
@@ -519,10 +542,12 @@ dynet::Expression TransformerLModel::step_forward(dynet::ComputationGraph &cg
 dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	, const WordIdSentences& tsents
 	, ModelStats* pstats
-	, bool is_eval_on_dev)
+	, bool is_eval_on_dev
+	, int* n_attn
+	, int* n_ff)
 {	
 	// decode target
-	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents);// ((num_units, Ly), batch_size)
+	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, n_attn, n_ff);// ((num_units, Ly), batch_size)
 
 	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
 	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);

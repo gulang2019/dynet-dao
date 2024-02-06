@@ -38,22 +38,20 @@ struct LinearLayer{
 		_p_W = (initLC == false)?mod.add_parameters({output_dim, input_dim}):mod.add_parameters({output_dim, input_dim}, ParameterInitLeCunUniform(input_dim), "w");
 		if (_lora_r) {
 			// delta_w = a @ b
-			_p_lora_A = mod.add_parameters({output_dim, _lora_r}, ParameterInitLeCunUniform(_lora_r, std::sqrt(2)), "lora.A");
-			_p_lora_B = mod.add_parameters({_lora_r, input_dim}, ParameterInitConst(0), "lora.B");
+			_p_lora_A = mod.add_parameters({output_dim, (unsigned)_lora_r}, ParameterInitLeCunUniform(_lora_r, std::sqrt(2)), "lora.A", dynet::default_device, true);
+			_p_lora_B = mod.add_parameters({(unsigned)_lora_r, input_dim}, ParameterInitConst(0), "lora.B", dynet::default_device, true);
 		}
 	}
 
 	dynet::Expression apply(dynet::ComputationGraph& cg, const dynet::Expression& i_x, bool reconstruct_shape=true, bool time_distributed=false){
 		using p2e_ty = dynet::Expression (*)(dynet::ComputationGraph&, dynet::Parameter);
-		p2e_ty param2expr = _frozen ? (p2e_ty)dynet::const_parameter : (p2e_ty)dynet::parameter;
-		dynet::Expression i_W;
+		// p2e_ty param2expr = _frozen ? (p2e_ty)dynet::const_parameter : (p2e_ty)dynet::parameter;
+		p2e_ty param2expr = (p2e_ty)dynet::parameter;
+		dynet::Expression i_W = param2expr(cg, _p_W);
 		if (_lora_r) {
-			i_W = dynet::const_parameter(cg, _p_W);
 			dynet::Expression i_lora_A = param2expr(cg, _p_lora_A);
 			dynet::Expression i_lora_B = param2expr(cg, _p_lora_B);
 			i_W = i_W + i_lora_A * i_lora_B;
-		} else {
-			i_W = param2expr(cg, _p_W);
 		}
 
 		dynet::Expression i_b; 

@@ -105,15 +105,23 @@ DynetParams extract_dynet_params(int& argc,
 
 #ifdef USE_DAO 
     // Dao Profile
+    else if (startswith(arg, "--dao-trace") ||
+             startswith(arg, "--dao-tracing")) {
+      DAO::profile_enabled = true;
+      remove_args(argc, argv, argi, 1);
+    }
+
     else if (startswith(arg, "--dao-profile") ||
-             startswith(arg, "--dao_profile")) {
+             startswith(arg, "--dao-profiling")) {
       if (!has_arg(argi, argc, argv)) {
-        throw std::invalid_argument("[dao] --dao_profile");
+        DAO::offload_profiling = 1;
+        remove_args(argc, argv, argi, 1);
       } else {
         string a2 = get_arg(argi, argv);
-        istringstream d(a2); d >> DAO::profile_enabled;
+        int v; 
+        istringstream d(a2); d >> DAO::offload_profiling;
         remove_args(argc, argv, argi, 2);
-      }
+      }      
     }
 
     else if (startswith(arg, "--dao-verbose") ||

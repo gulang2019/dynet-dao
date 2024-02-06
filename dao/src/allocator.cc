@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <unordered_set>
 #include <sys/sysinfo.h>
+#include <fstream>
 
 
 
@@ -34,11 +35,11 @@ SmartCudaEvent::~SmartCudaEvent() {
     CUDA_CHECK(cudaEventDestroy(event));
 }
 
-TensorRecord& GlobalMemRecord::lookup_tensor(TensorUID uid) {
+TensorRecord& GlobalMemRecord::lookup_tensor(TensorUID uid, TensorRecord::record_type_t record_type) {
     DAO_ASSERT(uid != NULL, "uid is NULL");    
     if (tensor_record_table.count(uid) == 0) {
         auto& record = tensor_record_table[uid];
-        record.record_type = TensorRecord::INTERMIDIATE; 
+        record.record_type = record_type; 
         record.tensor_id = uid;
         record.status = UNINITIALIZED;
         record.last_access = (logical_time_t)(-1);
@@ -86,14 +87,13 @@ void Allocator::init(
 }
 
 
-void* Allocator::prepare(TensorUID uid, bool is_global){
-    TensorRecord& record = global_memory_record -> lookup_tensor(uid);
-    if (is_global) record.record_type = TensorRecord::GLOBAL;
-    if (!is_global)
-        DAO_ASSERT(record.access_pattern.front() == logical_time, "access pattern front is not logical time");
+void* Allocator::prepare(TensorUID uid, TensorRecord::record_type_t record_type) {
+    TensorRecord& record = global_memory_record -> lookup_tensor(uid, record_type);
+    if (record_type == TensorRecord::INTERMIDIATE) { // this should be called from the prepare() only; 
+        DAO_ASSERT(record.access_pattern.front() == logical_time, "access pattern front is not logical time");}
     //this->wait_for_event_if_have(record);
-    DAO_ASSERT(gpu_manager->check_MemStorage(),  "gpu linked list invalid before prepare");
-    DAO_ASSERT(cpu_manager->check_MemStorage(),  "cpu linked list invalid before prepare");
+    // DAO_ASSERT(gpu_manager->check_MemStorage(),  "gpu linked list invalid before prepare");
+    // DAO_ASSERT(cpu_manager->check_MemStorage(),  "cpu linked list invalid before prepare");
     if (record.status == ONCPU){
         std::shared_ptr<MemBlock> block = this->allocate_on_gpu(record.tensor_size);
         if (block != nullptr) {
@@ -126,14 +126,21 @@ void* Allocator::prepare(TensorUID uid, bool is_global){
         block->record = &record;
         block->allocated = true;
     }
-    DAO_ASSERT(gpu_manager->check_MemStorage(),  "gpu linked list invalid after prepare");
-    DAO_ASSERT(cpu_manager->check_MemStorage(),  "cpu linked list invalid after prepare");
+    // DAO_ASSERT(gpu_manager->check_MemStorage(),  "gpu linked list invalid after prepare");
+    // DAO_ASSERT(cpu_manager->check_MemStorage(),  "cpu linked list invalid after prepare");
     if (zero_init_tensors.count(uid)) {
         CUDA_CHECK(cudaMemsetAsync(record.block_ptr->physical_location_start, 0, record.tensor_size, compute_stream));
         zero_init_tensors.erase(uid);
     }
-    statistics.max_cpu_usage = std::max(statistics.max_cpu_usage, cpu_manager->get_max_usage());
-    statistics.max_gpu_usage = std::max(statistics.max_gpu_usage, gpu_manager->get_max_usage());
+    max_cpu_usage = std::max(max_cpu_usage, cpu_manager->get_max_usage());
+    max_gpu_usage = std::max(max_gpu_usage, gpu_manager->get_max_usage());
+    if (offload_profiling == 1) {
+        statistics.push_back({});
+        auto & stat = statistics.back();
+        global_memory_record->get_statistics(stat);
+        stat.total_cpu_usage = cpu_manager->get_max_usage();
+        stat.total_gpu_usage = gpu_manager->get_max_usage();
+    }
     return record.block_ptr -> physical_location_start;
 }
 
@@ -186,10 +193,11 @@ void Allocator::prepare() {
     timer.start("prepare");
     std::unordered_set<TensorUID>& tensor_ids = all_accesses[logical_time];
     for (auto& tensor_id : tensor_ids) {
-        tensor_id->v = (float*)prepare(tensor_id);
+        tensor_id->v = (float*)prepare(tensor_id, TensorRecord::INTERMIDIATE);
     }
-    for (auto& tensor_id : tensor_ids) {
-        // if (debug_mode && tensor_values.count(tensor_id)) {
+    if (debug_mode) {
+        for (auto& tensor_id : tensor_ids) {
+        // if (tensor_values.count(tensor_id)) {
         //     std::vector<float> value(tensor_id->d.size());
         //     CUDA_CHECK(cudaMemcpyAsync(value.data(), tensor_id->v, value.size() * sizeof(float), cudaMemcpyDeviceToHost, compute_stream));
         //     CUDA_CHECK(cudaStreamSynchronize(compute_stream));
@@ -199,6 +207,7 @@ void Allocator::prepare() {
         //     }
         // }
         DAO_ASSERT(check_on_gpu(tensor_id), "tensor not on gpu");
+        }
     }
     global_memory_record->self_check();
     timer.stop("prepare");
@@ -237,22 +246,22 @@ void Allocator::complete() {
 
 void Allocator::display(std::ostream& o) const {
     o << "-------------Allocator----------------" << std::endl;
-    if (statistics.max_cpu_usage < 1024)
-        o << "max cpu usage: " << (statistics.max_cpu_usage) << "B" << std::endl;
-    else if (statistics.max_cpu_usage < 1024 * 1024)
-        o << "max cpu usage: " << (statistics.max_cpu_usage >> 10) << "KB" << std::endl;
-    else if (statistics.max_cpu_usage < 1024 * 1024 * 1024)
-        o << "max cpu usage: " << (statistics.max_cpu_usage >> 20) << "MB" << std::endl;
+    if (max_cpu_usage < 1024)
+        o << "max cpu usage: " << (max_cpu_usage) << "B" << std::endl;
+    else if (max_cpu_usage < 1024 * 1024)
+        o << "max cpu usage: " << (max_cpu_usage >> 10) << "KB" << std::endl;
+    else if (max_cpu_usage < 1024 * 1024 * 1024)
+        o << "max cpu usage: " << (max_cpu_usage >> 20) << "MB" << std::endl;
     else 
-        o << "max cpu usage: " << (statistics.max_cpu_usage >> 30) << "GB" << std::endl;
-    if (statistics.max_gpu_usage < 1024)
-        o << "max gpu usage: " << (statistics.max_gpu_usage) << "B" << std::endl;
-    else if (statistics.max_gpu_usage < 1024 * 1024)
-        o << "max gpu usage: " << (statistics.max_gpu_usage >> 10) << "KB" << std::endl;
-    else if (statistics.max_gpu_usage < 1024 * 1024 * 1024)
-        o << "max gpu usage: " << (statistics.max_gpu_usage >> 20) << "MB" << std::endl;
+        o << "max cpu usage: " << (max_cpu_usage >> 30) << "GB" << std::endl;
+    if (max_gpu_usage < 1024)
+        o << "max gpu usage: " << (max_gpu_usage) << "B" << std::endl;
+    else if (max_gpu_usage < 1024 * 1024)
+        o << "max gpu usage: " << (max_gpu_usage >> 10) << "KB" << std::endl;
+    else if (max_gpu_usage < 1024 * 1024 * 1024)
+        o << "max gpu usage: " << (max_gpu_usage >> 20) << "MB" << std::endl;
     else 
-        o << "max gpu usage: " << (statistics.max_gpu_usage >> 30) << "GB" << std::endl;
+        o << "max gpu usage: " << (max_gpu_usage >> 30) << "GB" << std::endl;
     if (verbose)
     {o << "Records: " << std::endl;
     global_memory_record->display(o);}
@@ -336,6 +345,7 @@ void Allocator::reset() {
     DAO_COND_WARNING(logical_time != all_accesses.size(), "not all kernels are executed");
     logical_time = 0;
     registered_time = 0;
+    max_gpu_usage = max_cpu_usage = 0;
     all_accesses.clear();
     zero_init_tensors.clear();
 }
@@ -356,7 +366,7 @@ std::vector<float> Allocator::get_values(TensorUID tensor_id) {
         CUDA_CHECK(cudaMemcpyAsync(value.data(), tensor_id->v, value.size() * sizeof(float), cudaMemcpyDeviceToHost, compute_stream));
         CUDA_CHECK(cudaStreamSynchronize(compute_stream));
     }
-    return std::move(value);
+    return value;
 }
 
 
@@ -383,9 +393,7 @@ void GlobalMemRecord::Register(std::unordered_set<TensorUID>& tensor_ids, logica
 void GlobalMemRecord::cal_last_access() {
     for (auto& pair: tensor_record_table) {
         auto& record = pair.second;
-        // some tensor is not accessed
-        // DAO_COND_WARNING(record.access_pattern.empty(), "some tensor is not accessed");
-        if (record.record_type == TensorRecord::GLOBAL) 
+        if (record.record_type != TensorRecord::INTERMIDIATE) 
             record.last_access = (logical_time_t)(-1);
         else 
             record.last_access = record.access_pattern.back();
@@ -405,13 +413,12 @@ bool Allocator::check_on_gpu(const dynet::Tensor* tensor_id) const {
     DAO_ASSERT(record.status != UNINITIALIZED, "tensor not initialized");
     DAO_ASSERT((dynet::Tensor*)tensor_id->v == (dynet::Tensor*)record.block_ptr->physical_location_start, "tensor_id->v != record.block_ptr->physical_location_start");
     DAO_ASSERT((((dynet::Tensor*)tensor_id)->d.size() * sizeof(float)) == record.tensor_size, "tensor_id->d.size() != record.tensor_size");
-    DAO_ASSERT(record.block_ptr->physical_location_start + record.tensor_size <= record.block_ptr->physical_location_end, "tensor_id->v + record.tensor_size > record.block_ptr->physical_location_end");
+    DAO_ASSERT((size_t)record.block_ptr->physical_location_start + record.tensor_size <= (size_t)record.block_ptr->physical_location_end, "tensor_id->v + record.tensor_size > record.block_ptr->physical_location_end");
     return record.status == ONGPU; 
 }
 
-void Allocator::set_global(TensorUID tensor_id) {
-    auto& record = global_memory_record->lookup_tensor(tensor_id);
-    record.record_type = TensorRecord::GLOBAL;
+void Allocator::set_record_type(TensorUID tensor_id, TensorRecord::record_type_t type) {
+    global_memory_record->lookup_tensor(tensor_id).record_type = type;
 }
 
 void GlobalMemRecord::self_check() const {
@@ -421,7 +428,7 @@ void GlobalMemRecord::self_check() const {
         tensor_ids.push_back(pair.first);
     }
 
-    for (int i = 0; i < tensor_ids.size(); i++) {
+    for (size_t i = 0; i < tensor_ids.size(); i++) {
         auto& record = tensor_record_table.at(tensor_ids[i]);
         if (record.status != UNINITIALIZED){
             DAO_ASSERT(record.block_ptr && record.block_ptr->allocated, "tensor %lu is not allocated", (size_t)tensor_ids[i] & 0xfff);
@@ -440,7 +447,7 @@ void GlobalMemRecord::self_check() const {
         return record_a.block_ptr->physical_location_start < record_b.block_ptr->physical_location_start;
     });
 
-    for (int i = 0; i < tensor_ids.size() - 1; ++i) {
+    for (size_t i = 0; i < tensor_ids.size() - 1; ++i) {
         auto& record_a = tensor_record_table.at(tensor_ids[i]);
         auto& record_b = tensor_record_table.at(tensor_ids[i + 1]);
         if (record_a.status == ONGPU && record_b.status == ONGPU)
@@ -452,6 +459,45 @@ void GlobalMemRecord::self_check() const {
 
 Kernel& Allocator::get_last_kernel() {
     return last_kernel;
+}
+
+void GlobalMemRecord::get_statistics(MemoryStatistics& stats) const {
+    auto & breakdown = stats.breakdown;
+    for (auto status: {UNINITIALIZED, ONCPU, ONGPU}) {
+        for (auto record_type: {TensorRecord::INTERMIDIATE,
+         TensorRecord::OPTIMIZER_STATE, TensorRecord::PARAMETER, TensorRecord::OUTPUT}) {
+            breakdown[status][record_type] = 0;
+        }
+    }
+    for (auto& kv: tensor_record_table) {
+        auto& record = kv.second;
+        breakdown[record.status][record.record_type] += record.tensor_size;
+    }
+}
+
+void Allocator::dump_memory_breakdown(const std::string& filename) const {
+    if (offload_profiling != 1) return; 
+    std::ofstream file;
+    if (filename.find(".csv") == std::string::npos) {
+        file.open(filename + ".csv");
+    }
+    else file.open(filename);
+    file << "cpu,cpu_total,cpu_intermediate,cpu_output,cpu_parameter,cpu_optimizer_state,gpu,gpu_total,gpu_intermediate,gpu_output,gpu_parameter,gpu_optimizer_state" << std::endl;
+    for (auto & stats: statistics) {
+        auto& breakdown = (stats.breakdown);
+        size_t cpu_mem = 0;
+        for (auto record_type: {TensorRecord::INTERMIDIATE, TensorRecord::OUTPUT, TensorRecord::PARAMETER, TensorRecord::OPTIMIZER_STATE}) {
+            cpu_mem += breakdown.at(ONCPU).at(record_type);
+        }
+        size_t gpu_mem = 0;
+        for (auto record_type: {TensorRecord::INTERMIDIATE, TensorRecord::OUTPUT, TensorRecord::PARAMETER, TensorRecord::OPTIMIZER_STATE}) {
+            gpu_mem += breakdown.at(ONGPU).at(record_type);
+        }
+        file << "," << cpu_mem << "," << stats.total_cpu_usage << "," << breakdown.at(ONCPU).at(TensorRecord::INTERMIDIATE) << "," << breakdown.at(ONCPU).at(TensorRecord::OUTPUT) << ","
+        << breakdown.at(ONCPU).at(TensorRecord::PARAMETER) << "," << breakdown.at(ONCPU).at(TensorRecord::OPTIMIZER_STATE) << "," << gpu_mem << "," << stats.total_gpu_usage << "," << breakdown.at(ONGPU).at(TensorRecord::INTERMIDIATE) << ","
+        << breakdown.at(ONGPU).at(TensorRecord::OUTPUT) << "," << breakdown.at(ONGPU).at(TensorRecord::PARAMETER) << "," << breakdown.at(ONGPU).at(TensorRecord::OPTIMIZER_STATE) << std::endl;
+    }
+    file.close();
 }
 
 } // namespace DAO
