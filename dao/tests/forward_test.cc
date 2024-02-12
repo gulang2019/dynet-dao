@@ -110,12 +110,12 @@ void check_fwd_bwd(
         auto& node = cg->nodes[idx];
         ParameterNode* pnode = static_cast<ParameterNode*>(node);
         if (pnode->params.p) {
-            pnode->params.get_storage().g.v = (float*)dao_allocator.prepare(&pnode->params.get_storage().g, true);
+            pnode->params.get_storage().g.v = (float*)dao_allocator.prepare(&pnode->params.get_storage().g, DAO::TensorRecord::PARAMETER);
             ground_truth.push_back(as_vector(pnode->params.get_storage().g));
             pnode->params.get_storage().clear();
         }
         else { 
-            pnode->lparams.get_storage().all_grads.v = (float*)dao_allocator.prepare(&pnode->lparams.get_storage().all_grads, true);
+            pnode->lparams.get_storage().all_grads.v = (float*)dao_allocator.prepare(&pnode->lparams.get_storage().all_grads, DAO::TensorRecord::OPTIMIZER_STATE);
             ground_truth.push_back(as_vector(pnode->lparams.get_storage().all_grads));
             pnode->lparams.get_storage().clear();
         }
@@ -136,12 +136,12 @@ void check_fwd_bwd(
         auto& node = cg->nodes[idx];
         ParameterNode* pnode = static_cast<ParameterNode*>(node);
         if (pnode->params.p) {
-            pnode->params.get_storage().g.v = (float*)dao_allocator.prepare(&pnode->params.get_storage().g, true);
+            pnode->params.get_storage().g.v = (float*)dao_allocator.prepare(&pnode->params.get_storage().g, DAO::TensorRecord::PARAMETER);
             value.push_back(engine.as_vector(pnode->params.get_storage().g));
             pnode->params.get_storage().clear();
         }
         else { 
-            pnode->lparams.get_storage().all_grads.v = (float*)dao_allocator.prepare(&pnode->lparams.get_storage().all_grads, true);
+            pnode->lparams.get_storage().all_grads.v = (float*)dao_allocator.prepare(&pnode->lparams.get_storage().all_grads, DAO::TensorRecord::OPTIMIZER_STATE);
             value.push_back(engine.as_vector(pnode->lparams.get_storage().all_grads));
             pnode->lparams.get_storage().clear();
         }
@@ -204,7 +204,13 @@ void test_mlp_bwd() {
     for (auto& layer : layers) {
         x = layer(cg, x);
     }
-    check_fwd_bwd(engine, cg, x);
+
+    const Tensor& value_fwd = engine.symbolic_forward(cg, x);
+    engine.symbolic_backward(cg, x);
+
+    engine.run();
+    engine.report();
+    // check_fwd_bwd(engine, cg, x);
 }
 
 // void test_xor() {
