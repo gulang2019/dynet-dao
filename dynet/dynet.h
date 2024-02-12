@@ -486,11 +486,23 @@ struct ComputationGraph {
    */
   unsigned get_id() const { return graph_id; };
 
+  /**
+   * \brief Mark the begining of each layer (for profiling)
+  */
+  void mark_layer_start(const std::string& layer_name) {
+    layer_marks.push_back(std::make_pair(nodes.size(), layer_name));
+  }
+
+  inline const std::vector<std::pair<VariableIndex, std::string> >& get_layer_marks() const {
+    return layer_marks;
+  }
+
   // data
   std::vector<Node*> nodes;  // **stored in topological order**
   std::vector<VariableIndex> parameter_nodes;  // nodes that contain parameters
                                                // that can be updated (subset of
                                                // nodes)
+  std::vector<std::pair<VariableIndex, std::string> > layer_marks;
 
   std::unique_ptr<ExecutionEngine> ee;  // handles the execution
 

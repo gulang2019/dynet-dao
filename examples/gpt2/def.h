@@ -167,6 +167,7 @@ struct TransformerConfig{
 	float _attention_dropout_rate = 0.1f;
 	float _ff_dropout_rate = 0.1f;
 	bool _decay_dropout = false; 
+	unsigned _truncate_layers = -1;
 	int _attn_lora_r = 0;
 	int _ff_lora_r = 0;
 
@@ -208,6 +209,9 @@ struct TransformerConfig{
 		, float attention_dropout_rate
 		, float ff_dropout_rate
 		, bool use_decay_dropout
+		, unsigned truncate_layers
+		, int attn_lora_r
+		, int ff_lora_r
 		, bool use_label_smoothing
 		, float label_smoothing_weight
 		, unsigned position_encoding
@@ -233,6 +237,9 @@ struct TransformerConfig{
 		_attention_dropout_rate = attention_dropout_rate;
 		_ff_dropout_rate = ff_dropout_rate;
 		_decay_dropout = use_decay_dropout;
+		_truncate_layers = truncate_layers;
+		_attn_lora_r = attn_lora_r;
+		_ff_lora_r = ff_lora_r;
 		_use_label_smoothing = use_label_smoothing;
 		_label_smoothing_weight = label_smoothing_weight;
 		_position_encoding = position_encoding;

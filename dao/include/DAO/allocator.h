@@ -137,8 +137,11 @@ private:
     std::unordered_set<TensorUID> zero_init_tensors; 
     Timer timer;
 
+    bool profiling = false;
+    std::unordered_set<TensorUID> accessed_tensors;
+
 public:
-    Allocator() = default;
+    Allocator():timer("allocator"){};
     ~Allocator();
     friend class Engine; 
 
@@ -191,6 +194,10 @@ protected:
     void free(TensorUID tensor_id);
     /** Get the number of registered kernels*/
     size_t get_num_registered_kernels() {return all_accesses.size();}
+    /** Start accumulate the memory footprint */
+    void start_profiling();
+    /** End accumulate the memory footprint */
+    size_t end_profiling();
 
 };
 

@@ -36,7 +36,7 @@ inline const char* node2str(const Node* node) {
 
 
 
-Engine::Engine(dynet::Trainer* trainer): allocator(dao_allocator), trainer(trainer) {
+Engine::Engine(dynet::Trainer* trainer): allocator(dao_allocator), trainer(trainer), timer("engine") {
     if (trainer) {
         const auto & params = trainer->model->parameters_list();
         const auto & lparams = trainer->model->lookup_parameters_list();
@@ -153,7 +153,7 @@ const Tensor& Engine::symbolic_forward(std::shared_ptr<dynet::ComputationGraph> 
     }
     allocator.set_record_type(nfxs.back(), DAO::TensorRecord::OUTPUT);
     timer.stop("symbolic_forward");
-    DAO_ASSERT(sanity_check(), "sanity_check() failed");
+
     return *nfxs.back();
 }
 
@@ -390,8 +390,20 @@ void Engine::run_forward(Instruction& inst) {
 
     assert(fwd_kernels.size() == cg->nodes.size());
 
+    int layer_idx = 0;
     for (dynet::VariableIndex i = 0; i < fwd_kernels.size(); ++i) {
         auto node = cg->nodes[i];
+        if (DAO::offload_profiling &&
+        layer_idx < cg->get_layer_marks().size() &&
+        cg->get_layer_marks()[layer_idx].first == i) {
+            if (layer_idx != 0) {
+                cudaDeviceSynchronize();
+                timer.cumint(timer.stop(), allocator.end_profiling());
+            }
+            timer.start("FWD " + cg->get_layer_marks()[layer_idx].second);
+            allocator.start_profiling();
+            layer_idx ++;
+        }
         if (node->forward_inplaced()) continue;
         auto& node_fx = nfxs[i];
         auto& fwd_kernel = fwd_kernels[i];
@@ -400,7 +412,7 @@ void Engine::run_forward(Instruction& inst) {
             xs.push_back(nfxs[x]);
         }
         
-        if (DAO::offload_profiling) {
+        if (DAO::offload_profiling > 2) {
             if (const char* name = node2str(node)) {
                 timer.start("FWD " + std::string(name));
             }
@@ -447,10 +459,16 @@ void Engine::run_forward(Instruction& inst) {
         node->forward(xs, *node_fx);
         allocator.complete();
 
-        if (DAO::offload_profiling) {
+        if (DAO::offload_profiling > 2) {
             cudaDeviceSynchronize();
             timer.stop();
         }
+    }
+
+    if (DAO::offload_profiling && 
+    cg->get_layer_marks().size()) {
+        cudaDeviceSynchronize();
+        timer.cumint(timer.stop(), allocator.end_profiling());
     }
 
     outputs.insert(nfxs.back());
@@ -470,40 +488,61 @@ void Engine::run_backward(Instruction& inst) {
     auto& acc_kernels = acc_kernelss[inst.idx];
 
     ndEdfs.back()->v = cg->nodes.back()->device->kSCALAR_ONE;
+    int layer_idx = cg->get_layer_marks().size() - 1;
+    if (layer_idx >= 0) {
+        timer.start("BWD " + cg->get_layer_marks().back().second);
+        allocator.start_profiling();
+    }
 
     for (auto& bwd_kernel: bwd_kernels) {
+        if (DAO::offload_profiling){
+            if (layer_idx >= 0
+                &&bwd_kernel.fx_idx < cg->get_layer_marks()[layer_idx].first){
+                cudaDeviceSynchronize();
+                timer.cumint(timer.stop(), allocator.end_profiling());
+                while(layer_idx >= 0
+                    && bwd_kernel.fx_idx < cg->get_layer_marks()[layer_idx].first){
+                    layer_idx--;
+                }            
+                if (layer_idx >=0) {
+                    timer.start("BWD " + cg->get_layer_marks()[layer_idx].second); 
+                    allocator.start_profiling();
+                }
+            }
+        }
+
         auto node = cg->nodes[bwd_kernel.fx_idx];
         
-        if (DAO::offload_profiling){
+        if (DAO::offload_profiling > 2){
             if (const char* name = node2str(node)) {
-                timer.start("FWD " + std::string(name));
+                timer.start("BWD " + std::string(name));
             }
             else {
-                timer.start("FWD " + node->as_dummy_string());
+                timer.start("BWD " + node->as_dummy_string());
             }
         }
         
-        if (DAO::offload_profiling){
+        if (DAO::offload_profiling > 2){
             if (const char* name = node2str(node)) {
-                timer.start("FWD " + std::string(name) + " prepare");
+                timer.start("BWD " + std::string(name) + " prepare");
             }
             else {
-                timer.start("FWD " + node->as_dummy_string() + " prepare");
+                timer.start("BWD " + node->as_dummy_string() + " prepare");
             }
         }
         allocator.prepare();
-        if (DAO::offload_profiling)
+        if (DAO::offload_profiling > 2)
         {
             cudaDeviceSynchronize();
             timer.stop();
         }
 
-        if (DAO::offload_profiling){
+        if (DAO::offload_profiling > 2){
             if (const char* name = node2str(node)) {
-                timer.start("FWD " + std::string(name) + " exec");
+                timer.start("BWD " + std::string(name) + " exec");
             }
             else {
-                timer.start("FWD " + node->as_dummy_string() + " exec");
+                timer.start("BWD " + node->as_dummy_string() + " exec");
             }
         }
         std::vector<const Tensor*> xs;
@@ -541,37 +580,43 @@ void Engine::run_backward(Instruction& inst) {
 
         node->backward(xs, *node_fx, *node_dEdfx, bwd_kernel.ai, *node_dEdxai);
 
-        if (DAO::offload_profiling)
+        if (DAO::offload_profiling > 2)
         {
             cudaDeviceSynchronize();
             timer.stop();
         }
 
-        if (DAO::offload_profiling){
+        if (DAO::offload_profiling > 2){
             if (const char* name = node2str(node)) {
-                timer.start("FWD " + std::string(name) + " exec");
+                timer.start("BWD " + std::string(name) + " exec");
             }
             else {
-                timer.start("FWD " + node->as_dummy_string() + " exec");
+                timer.start("BWD " + node->as_dummy_string() + " exec");
             }
         }
 
         allocator.complete();
 
-        if (DAO::offload_profiling)
+        if (DAO::offload_profiling > 2)
         {
             cudaDeviceSynchronize();
             timer.stop();
         }
 
-        if (DAO::offload_profiling)
+        if (DAO::offload_profiling > 2)
         {
             cudaDeviceSynchronize();
             timer.stop();
         }
     }
 
-    DAO_INFO_LEVEL(1, "BWD finished");
+    assert(layer_idx == 0 || layer_idx == -1);
+    if (DAO::offload_profiling&&
+        layer_idx >= 0) {
+        cudaDeviceSynchronize();
+        timer.cumint(timer.stop(), allocator.end_profiling());
+    } 
+
 
     if (DAO::offload_profiling) timer.start("accumulate_grad");
     for (auto& acc_grad_kernel: acc_kernels) {
@@ -677,6 +722,7 @@ Engine::~Engine() {
 
 void Engine::dump_statistics(const std::string& filename) const {
     allocator.dump_memory_breakdown(filename);
+    allocator.timer.save(filename);
     timer.save(filename);
 }
 

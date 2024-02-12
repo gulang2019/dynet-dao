@@ -69,12 +69,12 @@ void Allocator::init(
         MemStorage::CPU, cpu_init_size, logical_time, info.freeram, cpu_grow_size,
         DoubleLinkedListStorage::allocation_strategy_t::FIRST_FIT,
         DoubleLinkedListStorage::eviction_strategy_t::EVI_FIRST_FIT,
-        1024, 256u);
+        1024, 64u);
     gpu_manager = std::make_unique<DoubleLinkedListStorage>(
         MemStorage::GPU, gpu_init_size, logical_time, gpu_free_mem, gpu_grow_size, 
         allocation_strategy,
         evict_strategy,
-        1024, 256u);
+        1024, 64u);
     global_memory_record = std::make_unique<GlobalMemRecord>();
     //initialize compute stream, H2D stream and D2H stream
     this->compute_stream = cudaStreamDefault;
@@ -101,6 +101,7 @@ void* Allocator::prepare(TensorUID uid, TensorRecord::record_type_t record_type)
             if (record.event != nullptr)
                 CUDA_CHECK(cudaStreamWaitEvent(H2D_stream, record.event->get()));
             CUDA_CHECK(cudaMemcpyAsync(block->physical_location_start, record.block_ptr->physical_location_start, record.tensor_size, cudaMemcpyHostToDevice, H2D_stream));
+            timer.cumint("H2D", record.tensor_size);
             record.event = std::make_shared<SmartCudaEvent>(H2D_stream, "H2D::" + std::to_string(logical_time) + "::" + record.name);
             if (record.event != nullptr)
                 CUDA_CHECK(cudaStreamWaitEvent(compute_stream, record.event->get()));   
@@ -126,8 +127,6 @@ void* Allocator::prepare(TensorUID uid, TensorRecord::record_type_t record_type)
         block->record = &record;
         block->allocated = true;
     }
-    // DAO_ASSERT(gpu_manager->check_MemStorage(),  "gpu linked list invalid after prepare");
-    // DAO_ASSERT(cpu_manager->check_MemStorage(),  "cpu linked list invalid after prepare");
     if (zero_init_tensors.count(uid)) {
         CUDA_CHECK(cudaMemsetAsync(record.block_ptr->physical_location_start, 0, record.tensor_size, compute_stream));
         zero_init_tensors.erase(uid);
@@ -170,6 +169,7 @@ std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
             DAO_INFO_LEVEL(2, "copying %lu bytes from GPU %p to CPU %p using stream %p", evict_record->tensor_size, evicted_block->physical_location_start, CPU_block->physical_location_start, D2H_stream);
             CUDA_CHECK(cudaMemcpyAsync(CPU_block->physical_location_start, evicted_block->physical_location_start, evict_record->tensor_size, cudaMemcpyDeviceToHost, D2H_stream)); 
             evict_record->event = std::make_shared<SmartCudaEvent>(D2H_stream, "D2H::" + std::to_string(logical_time) + "::" + evict_record->name);
+            timer.cumint("D2H", evict_record->tensor_size);
             if (evict_record->event != nullptr)
                 CUDA_CHECK(cudaStreamWaitEvent(compute_stream, evict_record->event->get()));
 
@@ -192,6 +192,9 @@ std::shared_ptr<MemBlock> Allocator::allocate_on_gpu (size_t size) {
 void Allocator::prepare() {
     timer.start("prepare");
     std::unordered_set<TensorUID>& tensor_ids = all_accesses[logical_time];
+    if (profiling) {
+        accessed_tensors.insert(tensor_ids.begin(), tensor_ids.end());
+    }
     for (auto& tensor_id : tensor_ids) {
         tensor_id->v = (float*)prepare(tensor_id, TensorRecord::INTERMIDIATE);
     }
@@ -348,6 +351,8 @@ void Allocator::reset() {
     max_gpu_usage = max_cpu_usage = 0;
     all_accesses.clear();
     zero_init_tensors.clear();
+    profiling = false;
+    accessed_tensors.clear();
 }
 
 std::vector<float> Allocator::get_values(TensorUID tensor_id) {
@@ -498,6 +503,20 @@ void Allocator::dump_memory_breakdown(const std::string& filename) const {
         << breakdown.at(ONGPU).at(TensorRecord::OUTPUT) << "," << breakdown.at(ONGPU).at(TensorRecord::PARAMETER) << "," << breakdown.at(ONGPU).at(TensorRecord::OPTIMIZER_STATE) << std::endl;
     }
     file.close();
+}
+
+void Allocator::start_profiling() {
+    profiling = true;
+}
+
+size_t Allocator::end_profiling() {
+    size_t ret = 0;
+    for (auto t: accessed_tensors) {
+        ret += t->d.size() * sizeof(float);
+    }
+    profiling = false;
+    accessed_tensors.clear();
+    return ret;
 }
 
 } // namespace DAO

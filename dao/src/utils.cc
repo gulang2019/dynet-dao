@@ -10,7 +10,7 @@ using std::pair;
 
 namespace DAO {
 
-Timer::Timer(const char *t) : type(t)
+Timer::Timer(const char *name) : _name(name)
   {
     scope_tag = "default";
     scopes[scope_tag] = {};
@@ -20,12 +20,11 @@ Timer::Timer(const char *t) : type(t)
     if (locked)
       return;
     auto &scope = scopes[scope_tag];
-    if (scope.start_times.count(key) == 0)
-      scope.start_times[key] = std::chrono::high_resolution_clock::now();
-    last_key.push(key);
+    scope.start_times[key] = std::chrono::high_resolution_clock::now();
+    scope.keys.push_back(key);
   }
 
-  void Timer::stop(const std::string& key)
+void Timer::stop(const std::string& key)
   {
     auto &scope = scopes[scope_tag];
     if (locked)
@@ -33,23 +32,20 @@ Timer::Timer(const char *t) : type(t)
     if (!scope.start_times.count(key))
       return;
     double elapsed = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - scope.start_times[key]).count();
-    if (type == "DEFAULT")
-    {
-      scope.values[key] = elapsed;
-    }
-    else if (type == "ADD")
-    {
-      if (scope.values.count(key) == 0)
-        scope.values[key] = 0.0;
-      scope.values[key] += elapsed;
-    }
+    if (scope.values.count(key) == 0)
+      scope.values[key] = 0.0;
+    scope.values[key] += elapsed;
     scope.start_times.erase(key);
+    if (auto it = std::find(scope.keys.begin(), scope.keys.end(), key); it != scope.keys.end())
+      scope.keys.erase(it);
+    return;
   }
 
-  void Timer::stop() {
-    assert(!last_key.empty());
-    Timer::stop(last_key.top());
-    last_key.pop();
+  std::string Timer::stop() {
+    auto& scope = scopes[scope_tag];
+    std::string ret = scope.keys.back();
+    Timer::stop(scope.keys.back());
+    return ret;
   }
 
   void Timer::lock() { locked = true; }
@@ -75,7 +71,7 @@ Timer::Timer(const char *t) : type(t)
     }
     for (auto kv : scope.int_values)
     {
-        o << "\t" << kv.first << ":\t" << kv.second << "\n";
+        o << "\t" << kv.first << ":\t" << (kv.second >> 20) << "M" << "\n";
     }
     for (auto kv: scope.log_values) {
         o << "\t" << kv.first << ":";
@@ -98,7 +94,7 @@ Timer::Timer(const char *t) : type(t)
     scope_tag = "default";
   }
 
-  void Timer::cumint(std::string key, int v)
+  void Timer::cumint(std::string key, size_t v)
   {
     auto &scope = scopes[scope_tag];
     if (locked)
@@ -122,13 +118,14 @@ Timer::Timer(const char *t) : type(t)
 
   void Timer::save(const std::string& filename) const
   {
+    std::string prefix; 
     std::string _filename;
     size_t lastDotPosition = filename.find_last_of('.');
     if (lastDotPosition != std::string::npos) {
-        _filename = filename.substr(0, lastDotPosition);
+        prefix = filename.substr(0, lastDotPosition);
     }
-    else _filename = filename;
-    _filename += ".timer.csv";
+    else prefix = filename;
+    _filename += prefix + "." + _name + ".time.csv";
     std::ofstream file(_filename);
     auto& scope = scopes.at("default");
     file << "metric,value,percent" << std::endl;
@@ -142,6 +139,15 @@ Timer::Timer(const char *t) : type(t)
         { return v1.second > v2.second; });
     for (auto kv : values) {
       file << kv.first << "," << kv.second << "," << kv.second/tot*100 << std::endl;
+    }
+    file.close();
+
+    _filename = prefix + "." + _name + ".profiling.csv";
+    file.open(_filename);
+    file << "metric,value" << std::endl;
+    for (auto kv: scope.int_values)
+    {
+      file << kv.first << "," << (kv.second >> 20) << std::endl;
     }
     file.close();
   }

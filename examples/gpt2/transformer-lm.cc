@@ -133,6 +133,7 @@ int main(int argc, char** argv) {
 		("name", value<std::string>()->default_value("gpt"), "a name tag for the experiment")
 		("init-params", value<std::string>(), "the path to init params")
 		("profiling", value<std::string>(), "the profiling tag")
+		("truncate-layers", value<unsigned>()->default_value(-1), "the number of layers to execute")
 		//-----------------------------------------
 		("train,t", value<std::vector<std::string>>(), "file containing training sentences, with each line consisting of source ||| target.")		
 		("devel,d", value<std::string>(), "file containing development sentences.")
@@ -268,10 +269,8 @@ int main(int argc, char** argv) {
 	SentinelMarkers sm;// sentinel markers
 	WordIdSentences train_cor, devel_cor, test_cor;// integer-converted train and dev data
 	transformer::TransformerConfig tfc;// Transformer's configuration (either loaded from file or newly-created)
-	
-	tfc._attn_lora_r = vm["attn-lora-r"].as<unsigned>();
-	tfc._ff_lora_r = vm["ff-lora-r"].as<unsigned>();
-	if (tfc._attn_lora_r || tfc._ff_lora_r) // if non-zero, use LoRA for attention/FF fine-tune
+
+	if (vm["attn-lora-r"].as<unsigned>() || vm["ff-lora-r"].as<unsigned>()) // if non-zero, use LoRA for attention/FF fine-tune
 		dynet::ParameterCollection::set_default_updated(false);
 
 	std::string config_file = model_path + "/model.config";// configuration file path
@@ -303,15 +302,34 @@ int main(int argc, char** argv) {
 			std::string line;
 			getline(inpf_cfg, line);
 			std::stringstream ss(line);
-			tfc._tgt_vocab_size = d.size() + PAD_TOKENS;
 			tfc._sm = sm;
-			ss >> tfc._num_units >> tfc._nheads >> tfc._nlayers >> tfc._n_ff_units_factor
-			   >> tfc._decoder_emb_dropout_rate >> tfc._decoder_sublayer_dropout_rate >> tfc._attention_dropout_rate >> tfc._ff_dropout_rate 
-			   >> tfc._use_label_smoothing >> tfc._label_smoothing_weight
-			   >> tfc._position_encoding >> tfc._max_length
-			   >> tfc._attention_type
-			   >> tfc._ffl_activation_type
-			   >> tfc._use_hybrid_model;
+			ss >> tfc._src_vocab_size
+			>> tfc._tgt_vocab_size
+			>> tfc._num_units
+			>> tfc._nheads
+			>> tfc._nlayers
+			>> tfc._n_ff_units_factor
+			>> tfc._encoder_emb_dropout_rate
+			>> tfc._encoder_sublayer_dropout_rate
+			>> tfc._decoder_emb_dropout_rate
+			>> tfc._decoder_sublayer_dropout_rate
+			>> tfc._attention_dropout_rate
+			>> tfc._ff_dropout_rate
+			>> tfc._decay_dropout
+			>> tfc._truncate_layers
+			>> tfc._attn_lora_r
+			>> tfc._ff_lora_r
+			>> tfc._use_label_smoothing
+			>> tfc._label_smoothing_weight
+			>> tfc._position_encoding
+			>> tfc._position_encoding_flag
+			>> tfc._max_length
+			>> tfc._attention_type
+			>> tfc._ffl_activation_type
+			>> tfc._shared_embeddings
+			>> tfc._use_hybrid_model
+			>> tfc._is_training
+			>> tfc._use_dropout;
 		}// otherwise for testing, move on!		
 	}
 	else{// not exist, meaning that the model will be created from scratch!
@@ -336,6 +354,9 @@ int main(int argc, char** argv) {
 			, vm["attention-dropout-p"].as<float>()
 			, vm["ff-dropout-p"].as<float>()
 			, vm["dropout-decay"].as<bool>()
+			, vm["truncate-layers"].as<unsigned>()
+			, vm["attn-lora-r"].as<unsigned>()
+			, vm["ff-lora-r"].as<unsigned>()
 			, vm.count("use-label-smoothing")
 			, vm["label-smoothing-weight"].as<float>()
 			, vm["position-encoding"].as<unsigned>()
@@ -361,6 +382,8 @@ int main(int argc, char** argv) {
 
 		// initialise transformer object
 		transformer::TransformerLModel tf(tfc, d);
+		cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
+		cerr << endl << "Count of trainable parameters: " << tf.get_model_parameters().updated_parameter_count() << endl;
 		std::string model_file = model_path + "/model.params";
 		if (vm.count("init-params") > 0)
 			model_file = vm["init-params"].as<std::string>();
@@ -369,8 +392,9 @@ int main(int argc, char** argv) {
 			cerr << endl << "Loading pre-trained model from file: " << model_file << "..." << endl;
 			tf.initialise_params_from_file(model_file);// load pre-trained model (for incremental training)
 		}
-		cerr << endl << "Count of model parameters: " << tf.get_model_parameters().parameter_count() << endl;
-		cerr << endl << "Count of trainable parameters: " << tf.get_model_parameters().updated_parameter_count() << endl;
+
+		cerr << endl << "AFTER #model parameters: " << tf.get_model_parameters().parameter_count() << endl;
+		cerr << endl << "AFTER #trainable parameters: " << tf.get_model_parameters().updated_parameter_count() << endl;
 		
 		size_t lora_count = 0;
 		for (const auto param : tf.get_model_parameters().parameters_list()) {
@@ -819,12 +843,12 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 						DAO_ASSERT(is_valid(loss_value), "nan or -nan values occurred!");
 						tstats._scores[1] += loss_value;
 					}
-					stat.iter_exec_time = exec_timer.elapsed();
+					stat.iter_exec_time += exec_timer.elapsed();
 					stat.tot_exec_time += stat.iter_exec_time;
 					symbolic_losses.clear();
 					if (DAO::offload_profiling) {
 						engine->dump_statistics(PROFILING_STAT);
-						DAO_INFO_LEVEL(0, "Dump profiling data to %s.csv", PROFILING_STAT.c_str());
+						DAO_INFO_LEVEL(0, "Dump profiling data to %s.*.csv", PROFILING_STAT.c_str());
 						goto finish; 
 					}
 					if (sid / report_every_i != last_print 
@@ -1026,14 +1050,71 @@ void save_config(const std::string& config_out_file, const std::string& params_o
 	// 128 2 2 4 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.lm.transformer.h2_l2_u128_do01010101_att1_ls01_pe1_ml300_ffrelu_run1
 	// 128 2 2 4 0.1 0.1 0.1 0.1 0 0.1 1 0 300 1 1 0 0 <your-path>/models/iwslt-envi/params.lm.transformer.h2_l2_u128_do01010101_att1_ls01_pe1_ml300_ffrelu_run2
 	std::stringstream ss;
-		
-	ss << tfc._num_units << " " << tfc._nheads << " " << tfc._nlayers << " " << tfc._n_ff_units_factor << " "
-		<< tfc._decoder_emb_dropout_rate << " " << tfc._decoder_sublayer_dropout_rate << " " << tfc._attention_dropout_rate << " " << tfc._ff_dropout_rate << " "
-		<< tfc._use_label_smoothing << " " << tfc._label_smoothing_weight << " "
-		<< tfc._position_encoding << " " << tfc._max_length << " "
-		<< tfc._attention_type << " "
-		<< tfc._ffl_activation_type << " "
-		<< tfc._use_hybrid_model << " ";		
+	/*
+	ss << " " << tfc._src_vocab_size
+	<< " " << tfc._tgt_vocab_size
+	<< " " << tfc._num_units
+	<< " " << tfc._nheads
+	<< " " << tfc._nlayers
+	<< " " << tfc._n_ff_units_factor
+	<< " " << tfc._encoder_emb_dropout_rate
+	<< " " << tfc._encoder_sublayer_dropout_rate
+	<< " " << tfc._decoder_emb_dropout_rate
+	<< " " << tfc._decoder_sublayer_dropout_rate
+	<< " " << tfc._attention_dropout_rate
+	<< " " << tfc._ff_dropout_rate
+	<< " " << tfc._decay_dropout
+	<< " " << tfc._truncate_layers
+	<< " " << tfc._attn_lora_r
+	<< " " << tfc._ff_lora_r
+	<< " " << tfc._use_label_smoothing
+	<< " " << tfc._label_smoothing_weight
+	<< " " << tfc._position_encoding
+	<< " " << tfc._position_encoding_flag
+	<< " " << tfc._max_length
+	<< " " << tfc._sm
+	<< " " << tfc._attention_type
+	<< " " << tfc._ffl_activation_type
+	<< " " << tfc._shared_embeddings
+	<< " " << tfc.if (_shared_embeddings) _tgt_vocab_size
+	<< " " << tfc._use_hybrid_model
+	<< " " << tfc._is_training
+	<< " " << tfc._use_dropout;
+	*/
+	ss << tfc._src_vocab_size
+	<< " " << tfc._tgt_vocab_size
+	<< " " << tfc._num_units
+	<< " " << tfc._nheads
+	<< " " << tfc._nlayers
+	<< " " << tfc._n_ff_units_factor
+	<< " " << tfc._encoder_emb_dropout_rate
+	<< " " << tfc._encoder_sublayer_dropout_rate
+	<< " " << tfc._decoder_emb_dropout_rate
+	<< " " << tfc._decoder_sublayer_dropout_rate
+	<< " " << tfc._attention_dropout_rate
+	<< " " << tfc._ff_dropout_rate
+	<< " " << tfc._decay_dropout
+	<< " " << tfc._truncate_layers
+	<< " " << tfc._attn_lora_r
+	<< " " << tfc._ff_lora_r
+	<< " " << tfc._use_label_smoothing
+	<< " " << tfc._label_smoothing_weight
+	<< " " << tfc._position_encoding
+	<< " " << tfc._position_encoding_flag
+	<< " " << tfc._max_length
+	<< " " << tfc._attention_type
+	<< " " << tfc._ffl_activation_type
+	<< " " << tfc._shared_embeddings
+	<< " " << tfc._use_hybrid_model
+	<< " " << tfc._is_training
+	<< " " << tfc._use_dropout << " ";
+	// ss << tfc._num_units << " " << tfc._nheads << " " << tfc._nlayers << " " << tfc._n_ff_units_factor << " "
+	// 	<< tfc._decoder_emb_dropout_rate << " " << tfc._decoder_sublayer_dropout_rate << " " << tfc._attention_dropout_rate << " " << tfc._ff_dropout_rate << " "
+	// 	<< tfc._use_label_smoothing << " " << tfc._label_smoothing_weight << " "
+	// 	<< tfc._position_encoding << " " << tfc._max_length << " "
+	// 	<< tfc._attention_type << " "
+	// 	<< tfc._ffl_activation_type << " "
+	// 	<< tfc._use_hybrid_model << " ";		
 	ss << params_out_file;
 
 	ofstream outf_cfg(config_out_file);

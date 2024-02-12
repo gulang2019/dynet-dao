@@ -100,6 +100,7 @@ struct LMDecoderLayer{
 		float attn_skip_prob = _p_tfc->_decay_dropout? _p_tfc->_attention_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1) : _p_tfc->_attention_dropout_rate;
 		if (_p_tfc->_use_dropout) { // training
 			if (rand01() > attn_skip_prob) {
+				cg.mark_layer_start("Attn-" + std::to_string(_layer_idx));
 				// layer normalisation 1 (prenorm)
 				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln1_g, i_ln1_b);// ((num_units, Ly), batch_size)
 				// multi-head self attention sub-layer
@@ -121,6 +122,7 @@ struct LMDecoderLayer{
 		float ff_skip_prob = _p_tfc->_decay_dropout? _p_tfc->_ff_dropout_rate * _layer_idx / (_p_tfc->_nlayers - 1) : _p_tfc->_ff_dropout_rate;
 		if (_p_tfc->_use_dropout) { // training
 			if (rand01() > ff_skip_prob) {
+				cg.mark_layer_start("FF-" + std::to_string(_layer_idx));
 				// layer normalisation 3 (prenorm)
 				dynet::Expression i_ln = layer_norm_colwise_3(i_decl, i_ln2_g, i_ln2_b);// ((num_units, Ly), batch_size)
 				// position-wise feed-forward sub-layer
@@ -383,17 +385,21 @@ struct LMDecoder{
 		, const WordIdSentences& tsents/*batch of sentences*/,
 		int* n_attn = nullptr, int* n_ff = nullptr)
 	{		
+		cg.mark_layer_start("Embedding");
 		// compute target (+ postion) embeddings
 		dynet::Expression i_tgt_rep = compute_embeddings_and_masks(cg, tsents);// ((num_units, Ly), batch_size)
-			
+		
 		dynet::Expression i_dec_l_out = i_tgt_rep;
 		bool skip_attn, skip_ff;
 		int n_attns = 0, n_ffs = 0;
+		int layer_idx = 0;
 		for (auto dec : _v_dec_layers){
+			if (layer_idx > _p_tfc->_truncate_layers) break;
 			// stacking approach
 			i_dec_l_out = dec.build_graph(cg, i_dec_l_out, _self_mask, &skip_attn, &skip_ff);// each position in the decoder can attend to all positions (up to and including the current position) in the previous layer of the decoder.
 			n_attns += !skip_attn;
 			n_ffs += !skip_ff;
+			layer_idx ++;
 		}
 		if (n_attn) *n_attn += n_attns;
 		if (n_ff) *n_ff += n_ffs;
@@ -548,6 +554,8 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 {	
 	// decode target
 	dynet::Expression i_tgt_ctx = _decoder.get()->build_graph(cg, tsents, n_attn, n_ff);// ((num_units, Ly), batch_size)
+	
+	cg.mark_layer_start("Output");
 
 	dynet::Expression i_lnf_g = dynet::parameter(cg, _p_lnf_g);
 	dynet::Expression i_lnf_b = dynet::parameter(cg, _p_lnf_b);
@@ -556,39 +564,49 @@ dynet::Expression TransformerLModel::build_graph(dynet::ComputationGraph &cg
 	dynet::Expression i_Wo_emb_tgt = dynet::transpose(_decoder.get()->get_wrd_embedding_matrix(cg));// weight tying (use the same weight with target word embedding matrix) following https://arxiv.org/abs/1608.05859
 	dynet::Expression i_r = i_Wo_emb_tgt * i_tgt_ctx;// ((|V_T|, (Ly-1)), batch_size)
 
-	std::vector<dynet::Expression> v_errors;
+	// std::vector<dynet::Expression> v_errors;
 	unsigned tlen = _decoder.get()->_batch_tlen;
-	std::vector<unsigned> next_words(tsents.size());
-	for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
-		for(size_t bs = 0; bs < tsents.size(); bs++){
-			next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
-			if (tsents[bs].size() > t && pstats) {
-				pstats->_words_tgt++;
-				if (tsents[bs][t] == _tfc._sm._kTGT_UNK) pstats->_words_tgt_unk++;
-			}
-		}
+	// std::vector<unsigned> next_words(tsents.size());
+	// for (unsigned t = 0; t < tlen - 1; ++t) {// shifted right
+	// 	for(size_t bs = 0; bs < tsents.size(); bs++){
+	// 		next_words[bs] = (tsents[bs].size() > (t + 1)) ? (unsigned)tsents[bs][t + 1] : _tfc._sm._kTGT_EOS;
+	// 		if (tsents[bs].size() > t && pstats) {
+	// 			pstats->_words_tgt++;
+	// 			if (tsents[bs][t] == _tfc._sm._kTGT_UNK) pstats->_words_tgt_unk++;
+	// 		}
+	// 	}
 
-		// get the prediction at timestep t
-		//dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
-		dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// shifted right, ((|V_T|, 1), batch_size)
-	
-		// log_softmax and loss
-		dynet::Expression i_err;
-		if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
-		{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
-			// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
-			dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
-			dynet::Expression i_pre_loss = -dynet::pick(i_log_softmax, next_words);
-			dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
-			i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
-		}
-		else 
-			i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
+	// 	// get the prediction at timestep t
+	// 	//dynet::Expression i_r_t = dynet::select_cols(i_r, {t});// shifted right, ((|V_T|, 1), batch_size)
+	// 	dynet::Expression i_r_t = dynet::pick(i_r, t, 1);// shifted right, ((|V_T|, 1), batch_size)
 
-		v_errors.push_back(i_err);
+	// 	// log_softmax and loss
+	// 	dynet::Expression i_err;
+	// 	if (_tfc._use_label_smoothing && !is_eval_on_dev/*only applies in training*/)
+	// 	{// w/ label smoothing (according to section 7.5.1 of http://www.deeplearningbook.org/contents/regularization.html) and https://arxiv.org/pdf/1512.00567v1.pdf.
+	// 		// label smoothing regularizes a model based on a softmax with k output values by replacing the hard 0 and 1 classification targets with targets of \epsilon / (k−1) and 1 − \epsilon, respectively!
+	// 		dynet::Expression i_log_softmax = dynet::log_softmax(i_r_t);
+	// 		dynet::Expression i_pre_loss = -dynet::pick(i_log_softmax, next_words);
+	// 		dynet::Expression i_ls_loss = -dynet::sum_elems(i_log_softmax) / (_tfc._tgt_vocab_size - 1);// or -dynet::mean_elems(i_log_softmax)
+	// 		i_err = (1.f - _tfc._label_smoothing_weight) * i_pre_loss + _tfc._label_smoothing_weight * i_ls_loss;
+	// 	}
+	// 	else 
+	// 		i_err = dynet::pickneglogsoftmax(i_r_t, next_words);
+
+	// 	v_errors.push_back(i_err);
+	// }
+	// dynet::Expression i_tloss = dynet::sum_batches(dynet::sum(v_errors));
+
+	dynet::Expression i_r_reshaped = dynet::reshape(i_r, dynet::Dim({i_r.dim().d[0]}, (tlen-1) * tsents.size()));
+
+	std::vector<unsigned> next_word_idxs((tlen-1)*tsents.size(),  _tfc._sm._kTGT_EOS);
+	for(size_t bs = 0; bs < tsents.size(); bs++){
+		assert(tlen > (tsents[bs].size()-1));
+		memcpy(&next_word_idxs[bs*(tlen-1)], &tsents[bs][1], (tsents[bs].size()-1)*sizeof(unsigned));
+		if(pstats) pstats->_words_tgt += tsents[bs].size();
 	}
-
-	dynet::Expression i_tloss = dynet::sum_batches(dynet::sum(v_errors));
+	dynet::Expression i_err = dynet::pickneglogsoftmax(i_r_reshaped, next_word_idxs);
+	dynet::Expression i_tloss = dynet::sum_batches(i_err);
 
 	return i_tloss;
 }
