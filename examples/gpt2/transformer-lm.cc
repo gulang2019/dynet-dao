@@ -119,7 +119,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 int main(int argc, char** argv) {
 	cerr << "*** DyNet initialization ***" << endl;
 	auto dyparams = dynet::extract_dynet_params(argc, argv);
-	dynet::initialize(dyparams);	
+	dynet::initialize(dyparams);
 
 	// command line processing
 	variables_map vm; 
@@ -430,6 +430,9 @@ int main(int argc, char** argv) {
 		report_perplexity_score(v_tf_models, test_cor, MINIBATCH_SIZE);
 	}
 
+	if(DAO::use_dao){
+		DAO::finalize();
+	}
 	return EXIT_SUCCESS;
 }
 //************************************************************************************************************************************************************
@@ -832,8 +835,8 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 				sid += train_cor_minibatch[train_ids_minibatch[id]].size();
 				iter += train_cor_minibatch[train_ids_minibatch[id]].size();
 				if (++update_cnt == update_freq
-				|| iter >= dev_every_i_reports 
-				|| id + 1 == train_ids_minibatch.size()) {
+				|| (!DAO::offload_profiling && (iter >= dev_every_i_reports // if offload profiling, only update after the update_cnt reaches update_freq
+				|| id + 1 == train_ids_minibatch.size()))) {
 					update_cnt = 0;
 					MyTimer exec_timer("exec_time");
 					engine->run(&stat.max_gpu_usage, &stat.max_cpu_usage);
@@ -1035,7 +1038,7 @@ void run_train(transformer::TransformerLModel &tf, WordIdSentences &train_cor, W
 	}
 finish:
 	free(LOG_FILE);
-	delete engine; 
+	delete engine;
 	cerr << endl << "Transformer training completed!" << endl;
 	// DAO::profiler.dump(model_path + "/train");
 }

@@ -199,17 +199,17 @@ struct LMDecoder{
 		// get max length in a batch
 		size_t max_len = sents[0].size();
 		for(size_t i = 1; i < sents.size(); i++) max_len = std::max(max_len, sents[i].size());
+		unsigned max_sen_len = max_len - ((_p_tfc->_is_training)?1:0);
 		_batch_tlen = max_len;
-
 		std::vector<dynet::Expression> target_embeddings;   
 		std::vector<unsigned> words(sents.size());
-		std::vector<std::vector<float>> v_seq_masks(sents.size());
+		std::vector<std::vector<float>> v_seq_masks(sents.size(), std::vector<float>(max_sen_len, 1.f));
 		dynet::Expression i_tgt;
 		if (_p_tfc->_use_hybrid_model){
 			// target embeddings via RNN
 			_p_tgt_rnn->new_graph(cg);
 			_p_tgt_rnn->start_new_sequence();
-			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+			for (unsigned l = 0; l < max_len - ((_p_tfc->_is_training)?1:0); l++){// offset by 1 during training
 				for (unsigned bs = 0; bs < sents.size(); ++bs)
 				{
 					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
@@ -228,46 +228,68 @@ struct LMDecoder{
 			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
 		}
 		else{
-			// target embeddings
-			for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
-				for (unsigned bs = 0; bs < sents.size(); ++bs)
-				{
-					//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
-					if (l < sents[bs].size()){
-						words[bs] = (unsigned)sents[bs][l];
-						v_seq_masks[bs].push_back(0.f);// padding position
-					}
-					else{
-						words[bs] = (unsigned)_p_tfc->_sm._kTGT_EOS;
-						v_seq_masks[bs].push_back(1.f);// padding position
-					}
-				}
-
-				// auto tgt_emb = freeze_embedding ? dynet::const_lookup(cg, _p_embed_t, words) : dynet::lookup(cg, _p_embed_t, words);
-				target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));
+			std::vector<unsigned> indices(sents.size() * max_sen_len, _p_tfc->_sm._kTGT_EOS);
+			for (unsigned bs = 0; bs < sents.size(); ++bs) {
+				unsigned len = max_sen_len > sents[bs].size()? sents[bs].size() : max_sen_len;
+				memcpy(&indices[bs * max_sen_len], &sents[bs][0], len * sizeof(unsigned));
+				memset(&v_seq_masks[bs][0], 0, len * sizeof(float));
 			}
-			i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
+			// std::cout << "indices.size()" << indices.size() << ",max_len:" << max_len << ",max_sent_len:" << max_sen_len << ",bs:" << sents.size() << std::endl;
+			i_tgt = dynet::lookup(cg, _p_embed_t, indices);// ((num_units, Ly*batch_size), batch_size)
+			// std::cout << "i_tgt.dim()=" << i_tgt.dim() << std::endl;
+			i_tgt = dynet::reshape(i_tgt, dynet::Dim({(unsigned)i_tgt.dim().d[0], max_sen_len}, sents.size()));
+			// std::cout << "after i_tgt.dim()=" << i_tgt.dim() << std::endl;
+			// target embeddings
+			// for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+			// 	for (unsigned bs = 0; bs < sents.size(); ++bs)
+			// 	{
+			// 		//words[bs] = (l < sents[bs].size()) ? (unsigned)sents[bs][l] : (unsigned)_p_tfc->_sm._kTGT_EOS;
+			// 		if (l < sents[bs].size()){
+			// 			words[bs] = (unsigned)sents[bs][l];
+			// 			v_seq_masks[bs].push_back(0.f);// padding position
+			// 		}
+			// 		else{
+			// 			words[bs] = (unsigned)_p_tfc->_sm._kTGT_EOS;
+			// 			v_seq_masks[bs].push_back(1.f);// padding position
+			// 		}
+			// 	}
+
+			// 	// auto tgt_emb = freeze_embedding ? dynet::const_lookup(cg, _p_embed_t, words) : dynet::lookup(cg, _p_embed_t, words);
+			// 	target_embeddings.push_back(dynet::lookup(cg, _p_embed_t, words));
+			// }
+			// i_tgt = dynet::concatenate_cols(target_embeddings);// ((num_units, Ly), batch_size)
 
 			// scale
 			i_tgt = i_tgt * _scale_emb;// scaled embeddings
+			
+			// std::cout << "position_encoding=" << _p_tfc->_position_encoding << std::endl;
 
 			// + postional encoding			
 			if (_p_tfc->_position_encoding == 1){// learned positional embedding 
-				std::vector<dynet::Expression> pos_embeddings;  
-				std::vector<unsigned> positions(sents.size());
-				for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
-					for (unsigned bs = 0; bs < sents.size(); ++bs){
-						if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
-						else
-							positions[bs] = l;
+				for (unsigned bs = 0; bs < sents.size(); ++bs) {
+					for (unsigned l = 0; l < max_sen_len; l++){
+						indices[bs * max_sen_len + l] = l >= _p_tfc->_max_length? _p_tfc->_max_length-1 : l;
+					}
 				}
+				dynet::Expression i_pos = dynet::lookup(cg, _p_embed_pos, indices);
+				// std::cout << "after i_pos.dim()=" << i_pos.dim() << std::endl;
+				i_pos = dynet::reshape(i_pos, dynet::Dim({(unsigned)i_pos.dim().d[0], max_sen_len}, sents.size()));
+				// std::cout << "after i_pos.dim()=" << i_pos.dim() << std::endl;
+				// std::vector<dynet::Expression> pos_embeddings;  
+				// std::vector<unsigned> positions(sents.size());
+				// for (unsigned l = 0; l < max_len - (_p_tfc->_is_training)?1:0; l++){// offset by 1 during training
+				// 	for (unsigned bs = 0; bs < sents.size(); ++bs){
+				// 		if (l >= _p_tfc->_max_length) positions[bs] = _p_tfc->_max_length - 1;// Trick: if using learned position encoding, during decoding/inference, sentence length may be longer than fixed max length. We overcome this by tying to _p_tfc._max_length.
+				// 		else
+				// 			positions[bs] = l;
+				// 	}
 					
-					// auto pos_emb = freeze_embedding ? 
-					// 		dynet::const_lookup(cg, _p_embed_pos, positions) : dynet::lookup(cg, _p_embed_pos, positions);
-					auto pos_emb = dynet::lookup(cg, _p_embed_pos, positions);
-					pos_embeddings.push_back(pos_emb);
-				}
-				dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
+				// 	// auto pos_emb = freeze_embedding ? 
+				// 	// 		dynet::const_lookup(cg, _p_embed_pos, positions) : dynet::lookup(cg, _p_embed_pos, positions);
+				// 	auto pos_emb = dynet::lookup(cg, _p_embed_pos, positions);
+				// 	pos_embeddings.push_back(pos_emb);
+				// }
+				// dynet::Expression i_pos = dynet::concatenate_cols(pos_embeddings);// // ((num_units, Ly), batch_size)
 
 				i_tgt = i_tgt + i_pos;
 			}

@@ -17,6 +17,14 @@
 #include <DAO/globals.h>
 #include <stack>
 
+#define CUDA_CHECK(call) do { \
+    cudaError_t err = call; \
+    if (err != cudaSuccess) { \
+        fprintf(stderr, "CUDA error at %s %d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+        assert(false); \
+    } \
+} while (0)
+
 namespace DAO {
 
 struct TimerValue

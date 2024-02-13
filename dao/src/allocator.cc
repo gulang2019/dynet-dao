@@ -8,19 +8,16 @@
 #include <fstream>
 
 
-
-#define CUDA_CHECK(call) do { \
-    cudaError_t err = call; \
-    if (err != cudaSuccess) { \
-        fprintf(stderr, "CUDA error at %s %d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        assert(false); \
-    } \
-} while (0)
-
-
 namespace DAO {
 
-Allocator dao_allocator; 
+std::unique_ptr<Allocator> dao_allocator; 
+
+Allocator* get_allocator() {
+    if (dao_allocator == nullptr) {
+        throw std::runtime_error("Allocator is not initialized");
+    }
+    return dao_allocator.get();
+}
 
 SmartCudaEvent::SmartCudaEvent(cudaStream_t stream, const std::string& name): name(name) {
     CUDA_CHECK(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
@@ -34,6 +31,7 @@ cudaEvent_t SmartCudaEvent::get() {
 SmartCudaEvent::~SmartCudaEvent() {
     CUDA_CHECK(cudaEventDestroy(event));
 }
+
 
 TensorRecord& GlobalMemRecord::lookup_tensor(TensorUID uid, TensorRecord::record_type_t record_type) {
     DAO_ASSERT(uid != NULL, "uid is NULL");    
@@ -52,13 +50,14 @@ TensorRecord& GlobalMemRecord::lookup_tensor(TensorUID uid, TensorRecord::record
     return tensor_record_table[uid];
 }
 
-void Allocator::init(
+Allocator::Allocator(
     size_t cpu_init_size,
     size_t gpu_init_size, 
     size_t cpu_grow_size,
     size_t gpu_grow_size, 
     DoubleLinkedListStorage::allocation_strategy_t allocation_strategy,
-    DoubleLinkedListStorage::eviction_strategy_t evict_strategy
+    DoubleLinkedListStorage::eviction_strategy_t evict_strategy,
+    cudaStream_t* p_compute_stream
 ) {
     size_t gpu_free_mem, gpu_total_mem;
     cudaMemGetInfo(&gpu_free_mem, &gpu_total_mem);
@@ -77,7 +76,9 @@ void Allocator::init(
         1024, 64u);
     global_memory_record = std::make_unique<GlobalMemRecord>();
     //initialize compute stream, H2D stream and D2H stream
-    this->compute_stream = cudaStreamDefault;
+    if (p_compute_stream == nullptr)
+        this->compute_stream = cudaStreamDefault;
+    else this->compute_stream = *p_compute_stream;
 
     cudaSetDevice(DAO::default_device_id);
     CUDA_CHECK(cudaStreamCreate(&H2D_stream));
@@ -86,6 +87,11 @@ void Allocator::init(
     DAO_INFO_LEVEL(0, "Init GPU device %d, Mem %ld MB, CPU %ld MB, Compute %p, H2D %p, D2H %p", DAO::default_device_id, (gpu_init_size >> 20), (cpu_init_size >> 20),  compute_stream, H2D_stream, D2H_stream);
 }
 
+
+Allocator::~Allocator() {
+    CUDA_CHECK(cudaStreamDestroy(H2D_stream));
+    CUDA_CHECK(cudaStreamDestroy(D2H_stream));
+}
 
 void* Allocator::prepare(TensorUID uid, TensorRecord::record_type_t record_type) {
     TensorRecord& record = global_memory_record -> lookup_tensor(uid, record_type);
@@ -274,14 +280,6 @@ void Allocator::display(std::ostream& o) const {
     o << "------------Allocator END-------------" << std::endl;
 }
 
-Allocator::~Allocator() {
-    // CUDA_CHECK(cudaStreamDestroy(H2D_stream));
-    // CUDA_CHECK(cudaStreamDestroy(D2H_stream));
-    global_memory_record.release();
-    cpu_manager.release();
-    gpu_manager.release();
-}
-
 void TensorRecord::display(std::ostream& o, bool display_block) const {
     o << "<";
     o << name << ", ";
@@ -407,10 +405,6 @@ void GlobalMemRecord::cal_last_access() {
 
 void Allocator::finish_register() {
     global_memory_record->cal_last_access();
-}
-
-void Allocator::set_compute_stream(cudaStream_t stream) {
-    this->compute_stream = stream;
 }
 
 bool Allocator::check_on_gpu(const dynet::Tensor* tensor_id) const {

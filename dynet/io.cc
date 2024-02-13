@@ -214,7 +214,7 @@ void TextFileLoader::populate(ParameterCollection & model, const std::string & k
       if (has_grad) TensorTools::set_elements(*grad_t, values);
     } else  {
       if (has_grad) {
-        if (DAO::use_dao) {grad_t->v = (float*)DAO::dao_allocator.prepare(grad_t, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
+        if (DAO::use_dao) {grad_t->v = (float*)DAO::get_allocator()->prepare(grad_t, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
         TensorTools::zero(*grad_t);
       }
     }
@@ -248,7 +248,7 @@ void TextFileLoader::populate(Parameter & param,
         if(param.is_updated()) TensorTools::set_elements(param.get_storage().g, values);
       } else {
         if(param.is_updated()) {
-          if (DAO::use_dao) {param.get_storage().g.v = (float*)DAO::dao_allocator.prepare(&param.get_storage().g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
+          if (DAO::use_dao) {param.get_storage().g.v = (float*)DAO::get_allocator()->prepare(&param.get_storage().g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
           TensorTools::zero(param.get_storage().g);
         }
       }
@@ -284,7 +284,7 @@ void TextFileLoader::populate(LookupParameter & lookup_param,
         if(lookup_param.is_updated()) TensorTools::set_elements(lookup_param.get_storage().all_grads, values);
       } else {
         if(lookup_param.is_updated()) {
-          if (DAO::use_dao) {lookup_param.get_storage().all_grads.v = (float*)DAO::dao_allocator.prepare(&lookup_param.get_storage().all_grads, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
+          if (DAO::use_dao) {lookup_param.get_storage().all_grads.v = (float*)DAO::get_allocator()->prepare(&lookup_param.get_storage().all_grads, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
           TensorTools::zero(lookup_param.get_storage().all_grads);}
       }
       return;
@@ -318,7 +318,7 @@ Parameter TextFileLoader::load_param(ParameterCollection & model,
         { std::getline(datastream, line); std::istringstream iss(line); iss >> values; }
         TensorTools::set_elements(param.get_storage().g, values);
       } else {
-        if (DAO::use_dao) {param.get_storage().g.v = (float*)DAO::dao_allocator.prepare(&param.get_storage().g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
+        if (DAO::use_dao) {param.get_storage().g.v = (float*)DAO::get_allocator()->prepare(&param.get_storage().g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
         TensorTools::zero(param.get_storage().g);
       }
       return param;
@@ -353,7 +353,7 @@ LookupParameter TextFileLoader::load_lookup_param(ParameterCollection & model,
         { std::getline(datastream, line); std::istringstream iss(line); iss >> values; }
         TensorTools::set_elements(lookup_param.get_storage().all_grads, values);
       } else {
-        if (DAO::use_dao) {lookup_param.get_storage().all_grads.v = (float*)DAO::dao_allocator.prepare(&lookup_param.get_storage().all_grads, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
+        if (DAO::use_dao) {lookup_param.get_storage().all_grads.v = (float*)DAO::get_allocator()->prepare(&lookup_param.get_storage().all_grads, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);}
         TensorTools::zero(lookup_param.get_storage().all_grads);
       }
       return lookup_param;

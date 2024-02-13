@@ -36,7 +36,7 @@ inline const char* node2str(const Node* node) {
 
 
 
-Engine::Engine(dynet::Trainer* trainer): allocator(dao_allocator), trainer(trainer), timer("engine") {
+Engine::Engine(dynet::Trainer* trainer): allocator(*DAO::get_allocator()), trainer(trainer), timer("engine") {
     if (trainer) {
         const auto & params = trainer->model->parameters_list();
         const auto & lparams = trainer->model->lookup_parameters_list();
@@ -474,9 +474,23 @@ void Engine::run_forward(Instruction& inst) {
     outputs.insert(nfxs.back());
 }
 
+extern std::unique_ptr<DAO::Allocator> dao_allocator;
+
 void initialize() {
-    dao_allocator.init((size_t)(DAO::cpu_mem * (1 << 20)), (size_t)(DAO::gpu_mem * (1 << 20)), 0, 0);
-    dao_allocator.set_compute_stream(DAO::default_stream);
+    if (dao_allocator) return;
+    dao_allocator = std::make_unique<DAO::Allocator>(
+        (size_t) DAO::cpu_mem * (1 << 20), 
+        (size_t) DAO::gpu_mem * (1 << 20), 
+        (size_t) 512 << 20, 
+        (size_t)0, 
+        DoubleLinkedListStorage::FIRST_FIT,
+        DoubleLinkedListStorage::WEIGHTED_BELADY,
+        &DAO::default_stream      
+    );
+}
+
+void finalize() {
+    dao_allocator.reset();
 }
 
 void Engine::run_backward(Instruction& inst) {
@@ -610,7 +624,7 @@ void Engine::run_backward(Instruction& inst) {
         }
     }
 
-    assert(layer_idx == 0 || layer_idx == -1);
+    // assert(layer_idx == 0 || layer_idx == -1);
     if (DAO::offload_profiling&&
         layer_idx >= 0) {
         cudaDeviceSynchronize();

@@ -141,19 +141,17 @@ private:
     std::unordered_set<TensorUID> accessed_tensors;
 
 public:
-    Allocator():timer("allocator"){};
-    ~Allocator();
     friend class Engine; 
 
-    void init(size_t cpu_mem = CPU_MEM_SIZE, 
+    Allocator(size_t cpu_mem = CPU_MEM_SIZE, 
         size_t gpu_mem = GPU_MEM_SIZE,
         size_t cpu_grow_size = 1024*1024,
         size_t gpu_grow_size = 1024*1024, 
         DoubleLinkedListStorage::allocation_strategy_t allocation_strategy = DoubleLinkedListStorage::FIRST_FIT,
-        DoubleLinkedListStorage::eviction_strategy_t evict_strategy = DoubleLinkedListStorage::WEIGHTED_BELADY); 
-
-    void set_compute_stream(cudaStream_t stream);
+        DoubleLinkedListStorage::eviction_strategy_t evict_strategy = DoubleLinkedListStorage::WEIGHTED_BELADY, 
+        cudaStream_t* compute_stream = nullptr); 
     
+    ~Allocator();
     /**
      * @brief prepare a tensor, allocate memory for it;
      * @param tensor_id dynet::Tensor*
@@ -201,7 +199,7 @@ protected:
 
 };
 
-extern Allocator dao_allocator;
+Allocator* get_allocator();
 
 }
 

@@ -19,14 +19,14 @@ namespace dynet {
 ShadowParameters::ShadowParameters(const ParameterStorage& p) : h(p.values) {
   h.name = p.name + "_h"; 
   p.device->allocate_tensor(DeviceMempool::PS, h);
-  if (DAO::use_dao) DAO::dao_allocator.set_record_type(&h, DAO::TensorRecord::OPTIMIZER_STATE);
+  if (DAO::use_dao) DAO::get_allocator()->set_record_type(&h, DAO::TensorRecord::OPTIMIZER_STATE);
   TensorTools::zero(h);
 }
 
 ShadowLookupParameters::ShadowLookupParameters(const LookupParameterStorage& lp) : all_h(lp.all_values) {
   all_h.name = lp.name + "all_h"; 
   lp.device->allocate_tensor(DeviceMempool::PS, all_h);
-  if (DAO::use_dao) DAO::dao_allocator.set_record_type(&all_h, DAO::TensorRecord::OPTIMIZER_STATE);
+  if (DAO::use_dao) DAO::get_allocator()->set_record_type(&all_h, DAO::TensorRecord::OPTIMIZER_STATE);
   TensorTools::zero(all_h);
   initialize_lookups();
 }

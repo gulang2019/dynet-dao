@@ -14,6 +14,7 @@
 namespace DAO {
 
 void initialize();
+void finalize();
 
 struct Instruction{
     enum opcode_t{ 

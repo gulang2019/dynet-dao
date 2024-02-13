@@ -28,42 +28,53 @@ size_t VirtualMallocr::mem_limit() {
 }
 
 void CPURealMallocr::raw_free(void* ptr) {
-    cudaSetDevice(DAO::default_device_id);
-    cudaFreeHost(ptr);   
+    if (paged_memory.count(ptr)) {
+        paged_memory.erase(ptr);
+        free(ptr);
+        return; 
+    }
+    CUDA_CHECK(cudaSetDevice(DAO::default_device_id));
+    CUDA_CHECK(cudaFreeHost(ptr));
+    return; 
 }
 
 void* CPURealMallocr::raw_malloc(size_t size) {
-    cudaSetDevice(DAO::default_device_id);
-    void* ptr = nullptr;
-    cudaMallocHost(&ptr, size);
-    allocated += size;
+    allocated += size;     
+    if (size <= pinned_thresholde) {
+        void* ptr = nullptr;
+        CUDA_CHECK(cudaSetDevice(DAO::default_device_id));
+        CUDA_CHECK(cudaMallocHost(&ptr, size));
+        return ptr;
+    }
+    void* ptr = malloc(size);
+    paged_memory.insert(ptr);
     return ptr;
 }
 
 size_t CPURealMallocr::mem_limit() {
-    cudaSetDevice(DAO::default_device_id);
+    CUDA_CHECK(cudaSetDevice(DAO::default_device_id));
     struct sysinfo info;
     sysinfo(&info);
     return info.freeram;
 }
 
 void GPURealMallocr::raw_free(void* ptr) {
-    cudaSetDevice(DAO::default_device_id);
-    cudaFree(ptr);   
+    CUDA_CHECK(cudaSetDevice(DAO::default_device_id));
+    CUDA_CHECK(cudaFree(ptr));   
 }
 
 void* GPURealMallocr::raw_malloc(size_t size) {
-    cudaSetDevice(DAO::default_device_id);
+    CUDA_CHECK(cudaSetDevice(DAO::default_device_id));
     void* ptr = nullptr;
-    cudaMalloc(&ptr, size);
+    CUDA_CHECK(cudaMalloc(&ptr, size));
     allocated += size;
     return ptr;
 }
 
 size_t GPURealMallocr::mem_limit() {
-    cudaSetDevice(DAO::default_device_id);
+    CUDA_CHECK(cudaSetDevice(DAO::default_device_id));
     size_t free, total;
-    cudaMemGetInfo(&free, &total); 
+    CUDA_CHECK(cudaMemGetInfo(&free, &total)); 
     return free;
 }
 
@@ -74,6 +85,8 @@ MemStorage::MemStorage(device_type_t device_type, const std::string& name):
         device_mallocr = std::make_unique<CPURealMallocr>();
     } else if (device_type == GPU) {
         device_mallocr = std::make_unique<GPURealMallocr>();
+    } else if (device_type == VIRTUAL) {
+        device_mallocr = std::make_unique<VirtualMallocr>();
     }
 }
 
@@ -545,13 +558,15 @@ DoubleLinkedListStorage::~DoubleLinkedListStorage(){
         iter = iter->next;
         iter->prev->next.reset();
     }
-    for(auto ptr: allocated_list) {
-        device_mallocr->raw_free(ptr);
-    }
     assert(iter == end && iter->next == nullptr);
     iter->prev.reset();
     start.reset();
     end.reset();
+    iter.reset();
+
+    for(auto ptr: allocated_list) {
+        device_mallocr->raw_free(ptr);
+    }
 }
 
 void MemBlock::display(std::ostream& o) const {
@@ -635,7 +650,26 @@ bool DoubleLinkedListStorage::check_MemStorage() {
 }
 
 size_t DoubleLinkedListStorage::get_max_usage() const {
-    DAO_COND_WARNING(grow_size != 0, "grow_size is not 0, the max usage may not be accurate");
+    if (grow_size && DAO::offload_profiling) {
+        auto it = start->next;
+        size_t max_usage = 0;        
+        while(it != nullptr) {
+            auto last_allocated = it;
+            void* s = it->physical_location_start;
+            while (
+                it->next != nullptr && 
+                it->physical_location_end == it->next->physical_location_start) {
+                if (it->allocated) {
+                    last_allocated = it;
+                }
+                it = it->next;
+            }
+            max_usage += (char*)last_allocated->physical_location_end - (char*)s;
+            it = it->next;
+        }
+        return max_usage; 
+    }
+    DAO_COND_WARNING(!grow_size && !DAO::offload_profiling, "inaccurate max usage");
     auto it = end->prev;
     while(it!=start && it->allocated == false) {
         it = it->prev;

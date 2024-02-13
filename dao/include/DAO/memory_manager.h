@@ -45,6 +45,8 @@ struct CPURealMallocr: public DeviceRawMallocr {
     void raw_free(void*) override;
     size_t mem_limit() override;
     size_t allocated = 1024;
+    std::unordered_set<void*> paged_memory;
+    const size_t pinned_thresholde = 1 << 512u; // 512 MB for pinned memory, otherwise pageable memory
 };
 
 struct GPURealMallocr: public DeviceRawMallocr {

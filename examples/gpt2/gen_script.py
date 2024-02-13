@@ -44,7 +44,7 @@ for bs in args.bs:
                             if not os.path.exists(model_dir):
                                 os.makedirs(model_dir)
                             # cmd = f"cp /ssd1/siyuanch/workspace_zelongg/DAO/models/124M/dynet-model.params {model_dir}\n"
-                            cmd = f'./build_release/examples/transformer-lm -c {args.config} --use_offload --dao-gpu-mem {gpu_mem*1024} --dao-cpu-mem 16384 --minibatch-size {bs} --model-path {model_dir} --attn-lora-r {lora_r} --attention-dropout-p {attn} --ff-dropout-p {ff} --update-freq {uf} --reset-if-stuck --use-smaller-minibatch --logging --train-percent {args.train_percent} --truncate-layers {truncate_layers}'
+                            cmd = f'./build_release/examples/transformer-lm -c {args.config} --use_offload --dao-gpu-mem {gpu_mem*1024} --dao-cpu-mem 512 --minibatch-size {bs} --model-path {model_dir} --attn-lora-r {lora_r} --attention-dropout-p {attn} --ff-dropout-p {ff} --update-freq {uf} --reset-if-stuck --use-smaller-minibatch --logging --train-percent {args.train_percent} --truncate-layers {truncate_layers}'
                             if args.dropout_decay:
                                 cmd += ' --dropout-decay 1'
                             if args.profiling:

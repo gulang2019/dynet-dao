@@ -70,12 +70,12 @@ ParameterStorage::ParameterStorage(const Dim& d, float scale, const std::string 
   values.device = g.device = device;
   values.name = name + "_values";
   device->allocate_tensor(DeviceMempool::PS, values);
-  if (DAO::use_dao) DAO::dao_allocator.set_record_type(&values, DAO::TensorRecord::record_type_t::PARAMETER);
+  if (DAO::use_dao) DAO::get_allocator()->set_record_type(&values, DAO::TensorRecord::record_type_t::PARAMETER);
   if (updated)
   {
     g.name = name + "_gradients";
     device->allocate_tensor(DeviceMempool::PS, g);
-    if (DAO::use_dao) DAO::dao_allocator.set_record_type(&g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
+    if (DAO::use_dao) DAO::get_allocator()->set_record_type(&g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
     TensorTools::zero(g);
   }
   if (scale == 0.0f) {
@@ -102,12 +102,12 @@ ParameterStorage::ParameterStorage(const Dim& d, const ParameterInit & init,
   values.device = g.device = device;
   values.name = name + "_values";
   device->allocate_tensor(DeviceMempool::PS, values);
-  if (DAO::use_dao) DAO::dao_allocator.set_record_type(&values, DAO::TensorRecord::record_type_t::PARAMETER);
+  if (DAO::use_dao) DAO::get_allocator()->set_record_type(&values, DAO::TensorRecord::record_type_t::PARAMETER);
   if (updated){
     g.d = d;
     g.name = name + "_gradients";
     device->allocate_tensor(DeviceMempool::PS, g);
-    if (DAO::use_dao) DAO::dao_allocator.set_record_type(&g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
+    if (DAO::use_dao) DAO::get_allocator()->set_record_type(&g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
     TensorTools::zero(g);
   }
   init.initialize_params(values);
@@ -116,7 +116,7 @@ ParameterStorage::ParameterStorage(const Dim& d, const ParameterInit & init,
 size_t ParameterStorage::size() const { return dim.size(); }
 
 void ParameterStorage::zero() {
-  if (DAO::use_dao) values.v = (float*) DAO::dao_allocator.prepare(&values, DAO::TensorRecord::record_type_t::PARAMETER);
+  if (DAO::use_dao) values.v = (float*) DAO::get_allocator()->prepare(&values, DAO::TensorRecord::record_type_t::PARAMETER);
   TensorTools::zero(values);
   clear();
 }
@@ -131,7 +131,7 @@ void ParameterStorage::clear() {
   assert(updated);
   nonzero_grad = false;
   // if (g.v != nullptr)
-  if (DAO::use_dao) g.v = (float*) DAO::dao_allocator.prepare(&g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
+  if (DAO::use_dao) g.v = (float*) DAO::get_allocator()->prepare(&g, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
   assert(g.v);
   TensorTools::zero(g);
 }
@@ -160,10 +160,10 @@ LookupParameterStorage::LookupParameterStorage(unsigned n, const Dim& d, const P
   all_grads.device = all_values.device = device;
   all_values.name = name + "_values";
   device->allocate_tensor(DeviceMempool::PS, all_values);
-  if (DAO::use_dao) DAO::dao_allocator.set_record_type(&all_values, DAO::TensorRecord::record_type_t::PARAMETER);
+  if (DAO::use_dao) DAO::get_allocator()->set_record_type(&all_values, DAO::TensorRecord::record_type_t::PARAMETER);
   if (updated) {all_grads.name = name + "_gradients";
   device->allocate_tensor(DeviceMempool::PS, all_grads);
-  if (DAO::use_dao) DAO::dao_allocator.set_record_type(&all_grads, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
+  if (DAO::use_dao) DAO::get_allocator()->set_record_type(&all_grads, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
   }
   init.initialize_params(all_values);
   initialize_lookups();
@@ -186,7 +186,7 @@ void LookupParameterStorage::initialize_lookups() {
 }
 
 void LookupParameterStorage::zero() {
-  if (DAO::use_dao) all_values.v = (float*) DAO::dao_allocator.prepare(&all_values, DAO::TensorRecord::record_type_t::PARAMETER);
+  if (DAO::use_dao) all_values.v = (float*) DAO::get_allocator()->prepare(&all_values, DAO::TensorRecord::record_type_t::PARAMETER);
   TensorTools::zero(all_values);
 }
 
@@ -204,7 +204,7 @@ void LookupParameterStorage::clear() {
   assert(updated);
   // TODO: the GPU part is hacky, probably need a better heuristic
   if (all_grads.device->type == DeviceType::GPU || all_updated) {
-    if (DAO::use_dao) all_grads.v = (float*) DAO::dao_allocator.prepare(&all_grads, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
+    if (DAO::use_dao) all_grads.v = (float*) DAO::get_allocator()->prepare(&all_grads, DAO::TensorRecord::record_type_t::OPTIMIZER_STATE);
     TensorTools::zero(all_grads);
   } else {
     for (auto i : non_zero_grads){
